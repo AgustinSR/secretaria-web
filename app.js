@@ -27,6 +27,10 @@ const emailInput = document.querySelector('#emailInput');
 const passwordInput = document.querySelector('#passwordInput');
 const googleLoginButton = document.querySelector('#googleLoginButton');
 const userEmail = document.querySelector('#userEmail');
+const userAvatar = document.querySelector('#userAvatar');
+const workspace = document.querySelector('.workspace');
+const confirmDialogNode = document.querySelector('#confirmDialog');
+const toastRegion = document.querySelector('#toastRegion');
 const logoutButton = document.querySelector('#logoutButton');
 const refreshButton = document.querySelector('#refreshButton');
 const themeToggle = document.querySelector('#themeToggle');
@@ -130,6 +134,21 @@ tabButtons.forEach((button) => {
     render();
   });
 });
+document.addEventListener('keydown', (event) => {
+  if (appView.classList.contains('is-hidden') || confirmDialogNode.open) return;
+  const target = event.target;
+  const typing =
+    target instanceof HTMLElement &&
+    (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
+  if (event.key === '/' && !typing) {
+    event.preventDefault();
+    searchInput.focus();
+    searchInput.select();
+  } else if (event.key === 'Escape' && target === searchInput && searchInput.value) {
+    searchInput.value = '';
+    render();
+  }
+});
 
 if (appSettings.authRequired) {
   onAuthStateChanged(auth, (user) => {
@@ -164,7 +183,10 @@ function toggleTheme() {
 function setTheme(theme) {
   const isDark = theme === 'dark';
   document.documentElement.dataset.theme = isDark ? 'dark' : 'light';
-  themeToggle.textContent = isDark ? 'Modo claro' : 'Modo oscuro';
+  const label = isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro';
+  themeToggle.innerHTML = icon(isDark ? 'sun' : 'moon');
+  themeToggle.title = label;
+  themeToggle.setAttribute('aria-label', label);
   themeToggle.setAttribute('aria-pressed', String(isDark));
 }
 
@@ -177,6 +199,46 @@ function showApp(email) {
   authView.classList.add('is-hidden');
   appView.classList.remove('is-hidden');
   userEmail.textContent = email || '';
+  userEmail.title = email || '';
+  const photoUrl = currentUser?.photoURL || '';
+  userAvatar.innerHTML = photoUrl
+    ? `<img src="${escapeHtml(photoUrl)}" alt="" referrerpolicy="no-referrer" />`
+    : escapeHtml(initials(currentUser?.displayName || email || '?'));
+}
+
+function icon(name) {
+  return `<svg class="icon" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+}
+
+function confirmDialog(message, options = {}) {
+  const { title = 'Confirmar acción', confirmLabel = 'Confirmar', danger = false } = options;
+  confirmDialogNode.querySelector('#confirmTitle').textContent = title;
+  confirmDialogNode.querySelector('#confirmMessage').textContent = message;
+  const accept = confirmDialogNode.querySelector('#confirmAccept');
+  accept.textContent = confirmLabel;
+  accept.className = `btn ${danger ? 'btn-danger' : 'btn-primary'}`;
+  confirmDialogNode.classList.toggle('is-danger', danger);
+  confirmDialogNode.returnValue = '';
+  return new Promise((resolve) => {
+    confirmDialogNode.addEventListener(
+      'close',
+      () => resolve(confirmDialogNode.returnValue === 'ok'),
+      { once: true },
+    );
+    confirmDialogNode.showModal();
+    accept.focus();
+  });
+}
+
+function showToast(message, type = 'success') {
+  const node = document.createElement('div');
+  node.className = `toast toast-${type}`;
+  node.innerHTML = `${icon(type === 'error' ? 'alert' : 'check')}<span>${escapeHtml(message)}</span>`;
+  toastRegion.appendChild(node);
+  window.setTimeout(() => {
+    node.classList.add('is-leaving');
+    window.setTimeout(() => node.remove(), 220);
+  }, 3500);
 }
 
 function subscribe() {
@@ -236,6 +298,7 @@ function render(options = {}) {
   renderBulkActions(items);
   renderQueue(items);
   const selected = solicitudes.find((item) => item.id === selectedId);
+  workspace.classList.toggle('has-selection', Boolean(selected));
   if (selected) {
     if (!options.preserveDetail) {
       renderDetail(selected);
@@ -266,16 +329,33 @@ function matchesActiveInboxTab(item) {
 
 function renderCorrectionBadge(item) {
   return isCorrectionInboxItem(item)
-    ? '<span class="correction-pill">Correccion</span>'
+    ? `<span class="correction-pill">${icon('rotate')}Corrección</span>`
     : '';
+}
+
+function inboxTabCount(tab) {
+  const previousTab = activeInboxTab;
+  activeInboxTab = tab;
+  const count = solicitudes.filter(
+    (item) => item.eliminadoMesa !== true && matchesActiveInboxTab(item) && !isCompletedSolicitud(item),
+  ).length;
+  activeInboxTab = previousTab;
+  return count;
 }
 
 function renderTabs() {
   tabButtons.forEach((button) => {
-    const isActive = button.dataset.inboxTab === activeInboxTab;
+    const tab = button.dataset.inboxTab;
+    const isActive = tab === activeInboxTab;
     button.classList.toggle('is-active', isActive);
     button.setAttribute('aria-selected', String(isActive));
-    button.tabIndex = isActive ? 0 : -1;
+    const counter = button.querySelector('.tab-count');
+    if (counter) {
+      const count = tab === 'listas'
+        ? solicitudes.filter((item) => item.eliminadoMesa !== true && isDocumentInboxItem(item) && isReadyToLoadSolicitud(item)).length
+        : inboxTabCount(tab);
+      counter.textContent = count;
+    }
   });
 }
 
@@ -419,6 +499,7 @@ function renderQueue(items) {
     node.classList.toggle('is-viewed', item.vistoMesa === true);
     node.classList.toggle('is-completed', isCompletedSolicitud(item));
     node.classList.toggle('is-correction', isCorrectionInboxItem(item));
+    node.dataset.priority = isCompletedSolicitud(item) ? 'completada' : priority.level;
     checkbox.checked = selectedBulkIds.has(item.id);
     checkbox.setAttribute(
       'aria-label',
@@ -426,8 +507,11 @@ function renderQueue(items) {
     );
     node.querySelector('.queue-title').textContent =
       doctorName(item) || patientName(item) || `Solicitud ${item.id}`;
-    node.querySelector('.queue-subtitle').textContent =
-      `${formatDate(item.fechaPractica)} · Vence ${formatDate(resolveFechaVencimiento(item))} · Paciente: ${patientName(item)}`;
+    node.querySelector('.queue-subtitle').textContent = `Paciente: ${patientName(item)}`;
+    node.querySelector('.queue-dates').innerHTML = `
+      <span title="Fecha de práctica">${icon('clock')}${formatDate(item.fechaPractica)}</span>
+      <span title="Vencimiento">Vence ${formatDate(resolveFechaVencimiento(item))}</span>
+    `;
     const priorityPill = node.querySelector('.priority-pill');
     priorityPill.textContent = priority.label;
     priorityPill.classList.add(`priority-${priority.level}`);
@@ -439,7 +523,7 @@ function renderQueue(items) {
     if (item.vistoMesa === true) {
       const viewedPill = document.createElement('span');
       viewedPill.className = 'viewed-pill';
-      viewedPill.textContent = viewedCountLabel(item);
+      viewedPill.innerHTML = `${icon('eye')}${escapeHtml(viewedCountLabel(item))}`;
       viewedPill.title = viewedLabel(item);
       node.querySelector('.queue-meta').appendChild(viewedPill);
     }
@@ -461,6 +545,7 @@ function renderQueue(items) {
 function renderPlaceholder() {
   detailPanel.innerHTML = `
     <div class="placeholder">
+      ${icon('file')}
       <h2>Seleccioná una solicitud</h2>
       <p>La documentación, los archivos y el seguimiento aparecerán en este panel.</p>
     </div>
@@ -472,102 +557,132 @@ function renderDetail(item) {
   const archivosCorregidos = normalizedCorrectedFiles(item);
   const archivos = [...archivosOriginales, ...archivosCorregidos];
   const selectedFile = archivos[selectedFileIndex] || archivos[0];
+  const priority = priorityInfo(item);
   const cleanupNotice = item.archivosEliminados
-    ? `<div class="review-warning">Los archivos fueron eliminados por la limpieza mensual el ${formatDateTime(item.archivosEliminadosAt)}. El historial del trámite se conserva.</div>`
+    ? `<div class="notice notice-warning">${icon('alert')}<span>Los archivos fueron eliminados por la limpieza mensual el ${formatDateTime(item.archivosEliminadosAt)}. El historial del trámite se conserva.</span></div>`
     : '';
   const correctionNotice = isCorrectionInboxItem(item)
-    ? '<div class="correction-notice">Correccion recibida: este mensaje corresponde a documentacion reenviada por el medico.</div>'
+    ? `<div class="notice notice-violet">${icon('rotate')}<span><strong>Corrección recibida:</strong> este mensaje corresponde a documentación reenviada por el médico.</span></div>`
     : '';
 
   detailPanel.innerHTML = `
-    <div class="detail-header">
-      <div>
-        <p class="eyebrow">Solicitud ${shortId(item.id)}</p>
-        <h2>${escapeHtml(doctorName(item))}</h2>
-        <span class="tag">${statusLabel(item)}</span>
-        ${renderCorrectionBadge(item)}
-      </div>
-      <div class="queue-meta">
-        <span class="priority-pill priority-${priorityInfo(item).level}">
-          ${priorityInfo(item).label}
-        </span>
-        <span class="tag">${archivos.length} archivo${archivos.length === 1 ? '' : 's'}</span>
-        ${renderViewSummary(item)}
-      </div>
-    </div>
-    ${renderMetadataPanel(item)}
-    ${renderUploadObservations(item.observaciones)}
-    ${cleanupNotice}
-    <div class="detail-body">
-      <div class="files-panel">
-        <section class="file-section">
-          <p class="file-section-title">Archivos originales</p>
-          ${renderFileButtons(archivosOriginales, { offset: 0, solicitudId: item.id })}
-          ${renderRemoveSelectedFilesControl(item, archivosOriginales)}
-        </section>
-        ${renderCorrectedFilesSection(archivosCorregidos, archivosOriginales.length)}
-        ${renderAppendFileControl(item)}
-        ${renderPdfPageControl(item, selectedFile)}
-        <div class="merge-box merge-box-compact">
+    <article class="detail">
+      <header class="detail-header">
+        <div class="detail-heading">
+          <button id="detailBackButton" class="icon-button detail-back" type="button" aria-label="Volver a la bandeja">
+            ${icon('chevron-left')}
+          </button>
           <div>
-            <p class="eyebrow">PDF final</p>
-            <h3>Unificar documentacion</h3>
+            <p class="eyebrow">Solicitud ${shortId(item.id)}</p>
+            <h2>${escapeHtml(doctorName(item))}</h2>
+            <div class="detail-tags">
+              <span class="priority-pill priority-${priority.level}">${icon('clock')}${priority.label}</span>
+              <span class="tag">${statusLabel(item)}</span>
+              ${renderCorrectionBadge(item)}
+              <span class="tag">${icon('file')}${archivos.length} archivo${archivos.length === 1 ? '' : 's'}</span>
+            </div>
           </div>
-          ${mergeButtonDisabled(item) ? '' : `
-            <button id="mergeFilesButton" class="primary-button compact" type="button">
-              ${mergeButtonLabel(item)}
+        </div>
+        <div class="detail-header-side">
+          ${renderViewSummary(item)}
+        </div>
+      </header>
+
+      ${correctionNotice}
+      ${cleanupNotice}
+      ${renderMetadataPanel(item)}
+      ${renderUploadObservations(item.observaciones)}
+
+      <div class="detail-body">
+        <div class="files-panel">
+          <section class="card">
+            <div class="card-head">
+              <h3>${icon('file')}Archivos</h3>
+            </div>
+            <div class="card-body">
+              <div class="file-section">
+                <p class="file-section-title">Originales</p>
+                ${renderFileButtons(archivosOriginales, { offset: 0, solicitudId: item.id })}
+                ${renderRemoveSelectedFilesControl(item, archivosOriginales)}
+              </div>
+              ${renderCorrectedFilesSection(archivosCorregidos, archivosOriginales.length)}
+            </div>
+          </section>
+          ${renderAppendFileControl(item)}
+          ${renderPdfPageControl(item, selectedFile)}
+          <section class="card merge-card">
+            <div class="card-head">
+              <h3>${icon('layers')}PDF final unificado</h3>
+            </div>
+            <div class="card-body">
+              ${mergeStatusHtml(item)}
+              <button id="mergeFilesButton" class="btn btn-primary" type="button" ${mergeButtonDisabled(item)}>
+                ${icon('layers')}${mergeButtonLabel(item)}
+              </button>
+              ${feedbackHtml(item.id, 'merge')}
+            </div>
+          </section>
+        </div>
+        <div class="viewer-panel">
+          ${renderViewerToolbar(selectedFile)}
+          ${feedbackHtml(item.id, 'save')}
+          ${renderViewer(selectedFile)}
+        </div>
+      </div>
+
+      <div class="actions-grid">
+        ${renderCompleteReviewControl(item)}
+        <section class="card doctor-card">
+          <div class="card-head">
+            <h3>${icon('message')}Aviso al médico</h3>
+          </div>
+          <div class="card-body">
+            <p>
+              Enviá una observación visible en la app. La solicitud quedará como
+              observada y el médico recibirá una notificación.
+            </p>
+            <label class="sr-only" for="doctorNoticeInput">Motivo para el médico</label>
+            <textarea
+              id="doctorNoticeInput"
+              class="textarea"
+              rows="3"
+              placeholder="Motivo. Ej: El pedido está incompleto, falta firma o la imagen no es legible."
+            >${escapeHtml(item.observacionMedico?.motivo || '')}</textarea>
+            <button id="doctorNoticeButton" class="btn btn-secondary" type="button">
+              ${icon('send')}Notificar archivo incorrecto
             </button>
-          `}
-          ${mergeStatusHtml(item)}
-          ${feedbackHtml(item.id, 'merge')}
-        </div>
+            ${notificationStatusHtml(item)}
+            ${feedbackHtml(item.id, 'doctor')}
+          </div>
+        </section>
+        <section class="card danger-card">
+          <div class="card-head">
+            <h3>${icon('trash')}Eliminar de la bandeja</h3>
+          </div>
+          <div class="card-body">
+            <p>
+              Oculta esta solicitud de la bandeja de prestacional. El trámite y
+              sus archivos quedan guardados en Firebase para auditoría.
+            </p>
+            <button id="deleteMessageButton" class="btn btn-danger-soft" type="button">
+              ${icon('trash')}Eliminar de la bandeja
+            </button>
+            ${feedbackHtml(item.id, 'delete')}
+          </div>
+        </section>
       </div>
-      <div class="viewer-panel">
-        ${renderViewerToolbar(selectedFile)}
-        ${renderViewer(selectedFile)}
-      </div>
-    </div>
-    <div class="side-actions">
-      ${renderCompleteReviewControl(item)}
-      <div class="doctor-notice-box">
-        <div>
-          <p class="eyebrow">Aviso al médico</p>
-          <h3>Archivo incorrecto</h3>
-          <p>
-            Enviá una observación visible en la app. La solicitud quedará como
-            observada y el médico recibirá una notificación.
-          </p>
-        </div>
-        <label for="doctorNoticeInput">Motivo para el médico</label>
-        <textarea
-          id="doctorNoticeInput"
-          rows="3"
-          placeholder="Ej: El pedido está incompleto, falta firma o la imagen no es legible."
-        >${escapeHtml(item.observacionMedico?.motivo || '')}</textarea>
-        <button id="doctorNoticeButton" class="danger-button" type="button">
-          Notificar archivo incorrecto
-        </button>
-        ${notificationStatusHtml(item)}
-        ${feedbackHtml(item.id, 'doctor')}
-      </div>
-      <div class="delete-box">
-        <div>
-          <p class="eyebrow">Bandeja de entrada</p>
-          <h3>Eliminar mensaje</h3>
-          <p>
-            Oculta esta solicitud de la bandeja de prestacional. El trámite y
-            sus archivos quedan guardados en Firebase para auditoría.
-          </p>
-        </div>
-        <button id="deleteMessageButton" class="danger-button" type="button">
-          Eliminar de la bandeja
-        </button>
-        ${feedbackHtml(item.id, 'delete')}
-      </div>
+
       ${renderHistory(item.historial)}
-    </div>
+    </article>
   `;
 
+  bindFilePickers(detailPanel);
+  detailPanel.querySelector('#detailBackButton')?.addEventListener('click', () => {
+    selectedId = null;
+    selectedFileIndex = 0;
+    render();
+    window.scrollTo({ top: 0 });
+  });
   detailPanel
     .querySelector('#editMetadataButton')
     ?.addEventListener('click', () => {
@@ -795,12 +910,7 @@ function renderViewSummary(item) {
 
   return `
     <div class="view-summary" title="${escapeHtml(viewedLabel(item))}" aria-label="${escapeHtml(viewedCountLabel(item))}">
-      <span class="view-eye" aria-hidden="true">
-        <svg viewBox="0 0 24 24" focusable="false">
-          <path d="M2.4 12s3.5-6.2 9.6-6.2S21.6 12 21.6 12s-3.5 6.2-9.6 6.2S2.4 12 2.4 12Z"></path>
-          <circle cx="12" cy="12" r="2.8"></circle>
-        </svg>
-      </span>
+      ${icon('eye')}
       <strong>${count}</strong>
       <div class="viewer-stack">
         ${avatars}
@@ -874,8 +984,8 @@ function renderRemoveSelectedFilesControl(item, files) {
   return `
     <div class="bulk-file-delete-box">
       <span id="selectedFilesCount">${count === 1 ? '1 archivo seleccionado' : `${count} archivos seleccionados`}</span>
-      <button id="removeSelectedFilesButton" class="danger-inline-button" type="button" ${busy ? 'disabled' : ''}>
-        ${busy ? 'Quitando...' : 'Quitar seleccionados'}
+      <button id="removeSelectedFilesButton" class="btn btn-danger btn-sm" type="button" ${busy ? 'disabled' : ''}>
+        ${icon('trash')}${busy ? 'Quitando…' : 'Quitar'}
       </button>
     </div>
   `;
@@ -885,68 +995,109 @@ function renderFileButtons(files, options = {}) {
   const offset = options.offset || 0;
   const solicitudId = options.solicitudId || selectedId || '';
   const selectedForDelete = selectedFileDeleteIndexes(solicitudId);
-  const emptyText = options.emptyText || 'Todavia no hay archivos cargados.';
+  const emptyText = options.emptyText || 'Todavía no hay archivos cargados.';
   if (!files.length) {
-    return `<p class="muted">${emptyText}</p>`;
+    return `<p class="hint">${emptyText}</p>`;
   }
 
-  return files
+  const rows = files
     .map((file, index) => {
       const globalIndex = offset + index;
+      const name = file.name || `Archivo ${globalIndex + 1}`;
       const checked = selectedForDelete.has(file.originalIndex) ? 'checked' : '';
       const deleteCheck = file.canRemove
-        ? `<label class="file-delete-check" title="Seleccionar para quitar"><input class="file-delete-checkbox" type="checkbox" data-original-index="${file.originalIndex}" ${checked} /><span></span></label>`
+        ? `<label class="file-delete-check" title="Seleccionar para quitar"><input class="file-delete-checkbox" type="checkbox" data-original-index="${file.originalIndex}" aria-label="Seleccionar ${escapeHtml(name)} para quitar" ${checked} /></label>`
         : '';
       const removeButton = file.canRemove
-        ? `<button class="remove-file-button" data-original-index="${file.originalIndex}" type="button">Quitar archivo</button>`
+        ? `<button class="icon-button icon-button-sm icon-button-danger remove-file-button" data-original-index="${file.originalIndex}" type="button" title="Quitar archivo" aria-label="Quitar ${escapeHtml(name)}">${icon('x')}</button>`
         : '';
+      const isImage = ['jpg', 'jpeg', 'png'].includes((file.extension || '').toLowerCase());
+      const iconClass = file.isMerged ? 'file-icon-merged' : isImage ? 'file-icon-image' : '';
       return `
         <div class="file-row">
-          <div class="file-row-main">
-            ${deleteCheck}
-            <button class="file-button ${globalIndex === selectedFileIndex ? 'is-selected' : ''}" data-index="${globalIndex}" type="button">
-              <span>
-                <strong>${escapeHtml(file.name || `Archivo ${globalIndex + 1}`)}</strong><br />
-                <small>${escapeHtml((file.extension || '').toUpperCase())} · ${formatBytes(file.sizeBytes)}</small>
-              </span>
-              <span>Ver</span>
-            </button>
-          </div>
+          ${deleteCheck}
+          <button class="file-button ${globalIndex === selectedFileIndex ? 'is-selected' : ''}" data-index="${globalIndex}" type="button" title="Ver ${escapeHtml(name)}">
+            <span class="file-icon ${iconClass}">${icon(file.isMerged ? 'layers' : isImage ? 'image' : 'file')}</span>
+            <span class="file-text">
+              <strong>${escapeHtml(name)}</strong>
+              <small>${file.isMerged ? 'Unificado · ' : ''}${escapeHtml((file.extension || '').toUpperCase())} · ${formatBytes(file.sizeBytes)}</small>
+            </span>
+          </button>
           ${removeButton}
         </div>
       `;
     })
     .join('');
+  return `<div class="file-list">${rows}</div>`;
+}
+
+function bindFilePickers(root) {
+  root.querySelectorAll('.dropzone').forEach((zone) => {
+    const input = zone.querySelector('input[type="file"]');
+    const label = zone.querySelector('.dropzone-text strong');
+    if (!input || !label) return;
+    const emptyLabel = label.textContent;
+    const sync = () => {
+      const file = input.files?.[0];
+      label.textContent = file ? file.name : emptyLabel;
+      zone.classList.toggle('has-file', Boolean(file));
+    };
+    input.addEventListener('change', sync);
+    zone.addEventListener('dragover', (event) => {
+      if (input.disabled) return;
+      event.preventDefault();
+      zone.classList.add('is-dragging');
+    });
+    zone.addEventListener('dragleave', () => zone.classList.remove('is-dragging'));
+    zone.addEventListener('drop', (event) => {
+      zone.classList.remove('is-dragging');
+      if (input.disabled || !event.dataTransfer?.files?.length) return;
+      event.preventDefault();
+      const transfer = new DataTransfer();
+      transfer.items.add(event.dataTransfer.files[0]);
+      input.files = transfer.files;
+      sync();
+    });
+  });
+}
+
+function renderDropzone({ id, title, disabled = '' }) {
+  return `
+    <label class="dropzone" for="${id}">
+      ${icon('upload')}
+      <span class="dropzone-text">
+        <strong>${title}</strong>
+        <small>PDF, JPG o PNG · hasta 20 MB</small>
+      </span>
+      <input id="${id}" type="file" accept="application/pdf,image/jpeg,image/png" ${disabled} />
+    </label>
+  `;
 }
 
 function renderCorrectedFilesSection(files, offset) {
   if (!files.length) return '';
   return `
-    <section class="file-section file-section-corrected">
-      <p class="file-section-title">Archivos corregidos</p>
+    <div class="file-section file-section-corrected">
+      <p class="file-section-title">Corregidos por el médico</p>
       ${renderFileButtons(files, { offset, emptyText: 'Todavía no hay archivos corregidos.' })}
-    </section>
+    </div>
   `;
 }
 
 function renderAppendFileControl(item) {
   return `
-    <div class="upload-box upload-box-compact">
-      <p class="eyebrow">Agregar archivo</p>
-      <label class="upload-file-field" for="appendFileInput">
-        <span>PDF o imagen</span>
-        <input
-          id="appendFileInput"
-          type="file"
-          accept="application/pdf,image/jpeg,image/png"
-          ${uploadButtonDisabled(item)}
-        />
-      </label>
-      <button id="appendFileButton" class="primary-button" type="button" ${uploadButtonDisabled(item)}>
-        ${uploadButtonLabel(item)}
-      </button>
-      ${feedbackHtml(item.id, 'upload')}
-    </div>
+    <section class="card">
+      <div class="card-head">
+        <h3>${icon('upload')}Agregar archivo</h3>
+      </div>
+      <div class="card-body">
+        ${renderDropzone({ id: 'appendFileInput', title: 'Elegí o arrastrá un archivo', disabled: uploadButtonDisabled(item) })}
+        <button id="appendFileButton" class="btn btn-secondary" type="button" ${uploadButtonDisabled(item)}>
+          ${icon('plus')}${uploadButtonLabel(item)}
+        </button>
+        ${feedbackHtml(item.id, 'upload')}
+      </div>
+    </section>
   `;
 }
 
@@ -1023,12 +1174,12 @@ function renderPdfPageNumberField({ id, label, pageCount, disabled, defaultValue
     const options = Array.from({ length: pageCount }, (_, index) => {
       const page = index + 1;
       const selected = page === selectedValue ? 'selected' : '';
-      return `<option value="${page}" ${selected}>Pagina ${page}</option>`;
+      return `<option value="${page}" ${selected}>Página ${page}</option>`;
     }).join('');
     return `
-      <label class="upload-file-field" for="${id}">
+      <label class="field" for="${id}">
         <span>${label}</span>
-        <select id="${id}" class="pdf-page-select" ${disabled}>
+        <select id="${id}" ${disabled}>
           ${options}
         </select>
       </label>
@@ -1036,7 +1187,7 @@ function renderPdfPageNumberField({ id, label, pageCount, disabled, defaultValue
   }
 
   return `
-    <label class="upload-file-field" for="${id}">
+    <label class="field" for="${id}">
       <span>${label}</span>
       <input
         id="${id}"
@@ -1066,11 +1217,11 @@ function renderRemovePagePicker(item, file, disabled, busy) {
   if (failed || loading || !pageCount) {
     return `
       <div class="pdf-page-actions">
-        <label class="upload-file-field">
-          <span>Quitar pagina</span>
+        <label class="field">
+          <span>Quitar página</span>
           <input
             type="text"
-            value="${failed ? 'No se pudo leer' : loading ? 'Cargando paginas...' : 'Leyendo PDF...'}"
+            value="${failed ? 'No se pudo leer' : loading ? 'Cargando páginas…' : 'Leyendo PDF…'}"
             disabled
           />
         </label>
@@ -1082,9 +1233,9 @@ function renderRemovePagePicker(item, file, disabled, busy) {
   if (pageCount <= 1) {
     return `
       <div class="pdf-page-actions">
-        <label class="upload-file-field">
-          <span>Quitar pagina</span>
-          <input type="text" value="PDF de 1 pagina" disabled />
+        <label class="field">
+          <span>Quitar página</span>
+          <input type="text" value="PDF de 1 página" disabled />
         </label>
 
       </div>
@@ -1095,12 +1246,12 @@ function renderRemovePagePicker(item, file, disabled, busy) {
     <div class="pdf-page-actions">
       ${renderPdfPageNumberField({
         id: 'removePdfPageInput',
-        label: 'Quitar pagina',
+        label: 'Quitar página',
         pageCount,
         disabled: removeDisabled,
       })}
-      <button id="removePdfPageButton" class="danger-inline-button" type="button" ${removeDisabled}>
-        ${busy ? 'Editando...' : 'Quitar pagina'}
+      <button id="removePdfPageButton" class="btn btn-danger-soft btn-sm" type="button" ${removeDisabled}>
+        ${icon('scissors')}${busy ? 'Editando…' : 'Quitar'}
       </button>
     </div>
   `;
@@ -1124,19 +1275,19 @@ function renderMovePagePicker(item, file, disabled, busy) {
     <div class="pdf-page-actions pdf-page-actions-move">
       ${renderPdfPageNumberField({
         id: 'movePdfPageFromInput',
-        label: 'Mover pagina',
+        label: 'Mover página',
         pageCount,
         disabled: moveDisabled,
       })}
       ${renderPdfPageNumberField({
         id: 'movePdfPageToInput',
-        label: 'A posicion',
+        label: 'A posición',
         pageCount,
         disabled: moveDisabled,
         defaultValue: Math.min(2, pageCount),
       })}
-      <button id="movePdfPageButton" class="primary-button compact" type="button" ${moveDisabled}>
-        ${busy ? 'Editando...' : 'Mover pagina'}
+      <button id="movePdfPageButton" class="btn btn-secondary btn-sm" type="button" ${moveDisabled}>
+        ${icon('move')}${busy ? 'Editando…' : 'Mover'}
       </button>
     </div>
   `;
@@ -1150,27 +1301,25 @@ function renderPdfPageControl(item, file) {
   const disabled = pdfPageEditButtonDisabled(item, file);
   const busy = pdfPageEditInProgressIds.has(pdfPageEditKey(item.id, file));
   return `
-    <div class="upload-box upload-box-compact pdf-page-box">
-      <p class="eyebrow">Editar paginas del PDF seleccionado</p>
-      ${renderRemovePagePicker(item, file, disabled, busy)}
-      ${renderMovePagePicker(item, file, disabled, busy)}
-      <div class="pdf-page-actions">
-        <label class="upload-file-field" for="appendPdfPageInput">
-          <span>Agregar pagina al final</span>
-          <input
-            id="appendPdfPageInput"
-            type="file"
-            accept="application/pdf,image/jpeg,image/png"
-            ${disabled}
-          />
-        </label>
-        <button id="appendPdfPageButton" class="primary-button compact" type="button" ${disabled}>
-          ${busy ? 'Editando...' : 'Agregar pagina'}
-        </button>
+    <section class="card">
+      <div class="card-head">
+        <h3>${icon('pencil')}Editar páginas del PDF</h3>
       </div>
-      <p class="muted">La edicion crea una nueva version del PDF original. Despues regenera el PDF unificado.</p>
-      ${feedbackHtml(item.id, 'pdfPage')}
-    </div>
+      <div class="card-body pdf-page-tools">
+        <p class="hint">Sobre: <strong>${escapeHtml(file.name || 'PDF seleccionado')}</strong></p>
+        ${renderRemovePagePicker(item, file, disabled, busy)}
+        ${renderMovePagePicker(item, file, disabled, busy)}
+        <div class="tool-divider"></div>
+        <div class="pdf-page-actions">
+          ${renderDropzone({ id: 'appendPdfPageInput', title: 'Agregar página al final', disabled })}
+          <button id="appendPdfPageButton" class="btn btn-secondary btn-sm" type="button" ${disabled}>
+            ${icon('plus')}${busy ? 'Editando…' : 'Agregar'}
+          </button>
+        </div>
+        <p class="hint">La edición crea una nueva versión del PDF original. Después regenerá el PDF unificado.</p>
+        ${feedbackHtml(item.id, 'pdfPage')}
+      </div>
+    </section>
   `;
 }
 function fileToBase64(file) {
@@ -1187,7 +1336,7 @@ function fileToBase64(file) {
 
 function renderViewer(file) {
   if (!file?.downloadUrl) {
-    return '<div class="placeholder"><p>No hay archivo para previsualizar.</p></div>';
+    return `<div class="placeholder">${icon('file')}<p>No hay archivo para previsualizar.</p></div>`;
   }
 
   const url = escapeHtml(file.downloadUrl);
@@ -1203,14 +1352,16 @@ function renderViewerToolbar(file) {
   const disabled = file?.downloadUrl ? '' : 'disabled';
   return `
     <div class="viewer-toolbar">
-      <div>
+      <div class="viewer-title">
         <strong>${escapeHtml(file?.name || 'Archivo')}</strong>
         <span>${escapeHtml((file?.extension || '').toUpperCase())} · ${formatBytes(file?.sizeBytes)}</span>
       </div>
       <div class="viewer-toolbar-actions">
-        <button id="openFileButton" class="ghost-button" type="button" ${disabled}>Abrir</button>
-        <button id="downloadFileButton" class="primary-button compact" type="button" ${disabled}>
-          Descargar a la PC
+        <button id="openFileButton" class="btn btn-ghost btn-sm" type="button" ${disabled}>
+          ${icon('external')}Abrir
+        </button>
+        <button id="downloadFileButton" class="btn btn-primary btn-sm" type="button" ${disabled}>
+          ${icon('download')}Descargar a la PC
         </button>
       </div>
     </div>
@@ -1274,8 +1425,9 @@ async function markSolicitudCompleted(id) {
   }
 
   const title = doctorName(item) || patientName(item) || shortId(id);
-  const confirmed = window.confirm(
-    `Vas a marcar "${title}" como completada. Quedara al final de la bandeja para priorizar lo pendiente. Continuar?`,
+  const confirmed = await confirmDialog(
+    `Vas a marcar "${title}" como completada. Quedará al final de la bandeja para priorizar lo pendiente.`,
+    { title: 'Marcar como completada', confirmLabel: 'Marcar completada' },
   );
   if (!confirmed) return;
 
@@ -1320,8 +1472,9 @@ async function sendDoctorObservation(id) {
   }
 
   const title = doctorName(item) || patientName(item) || shortId(id);
-  const confirmed = window.confirm(
-    `Vas a marcar la solicitud de "${title}" como observada y enviar este motivo al médico:\n\n"${reason}"\n\n¿Confirmás el envío?`,
+  const confirmed = await confirmDialog(
+    `Vas a marcar la solicitud de "${title}" como observada y enviar este motivo al médico:\n\n"${reason}"`,
+    { title: '¿Notificar al médico?', confirmLabel: 'Enviar aviso' },
   );
   if (!confirmed) return;
 
@@ -1371,7 +1524,7 @@ async function mergeFiles(id) {
   if (item) renderDetail(item);
 
   try {
-    const data = await callAdminFunction('mergeObraSocialSolicitudFiles', {
+    await callAdminFunction('mergeObraSocialSolicitudFiles', {
       solicitudId: id,
       actor: currentUser?.email || 'mesa de ayuda prestacional',
     });
@@ -1435,10 +1588,8 @@ async function appendFileToSolicitud(id) {
 
   const currentFiles = Array.isArray(item?.archivos) ? item.archivos : [];
   const actor = currentUser?.email || 'mesa de ayuda prestacional';
-  const now = new Date().toISOString();
   const order = currentFiles.length + 1;
   const filename = safeFilename(file.name || `archivo-${order}.${extension}`);
-  const path = `${appSettings.collectionName}/${id}/originales/prestacional_${Date.now()}_${filename}`;
 
   uploadInProgressIds.add(id);
   button.disabled = true;
@@ -1527,8 +1678,9 @@ async function removePageFromSelectedPdf(id, selectedFile) {
   }
 
   const filename = selectedFile.name || selectedFile.originalName || 'PDF seleccionado';
-  const confirmed = window.confirm(
+  const confirmed = await confirmDialog(
     `¿Querés quitar la página ${pageNumber} de "${filename}"? Esta acción crea una nueva versión del PDF.`,
+    { title: 'Quitar página', confirmLabel: 'Quitar página', danger: true },
   );
   if (!confirmed) return;
 
@@ -1603,8 +1755,9 @@ async function movePageInSelectedPdf(id, selectedFile) {
   }
 
   const filename = selectedFile.name || selectedFile.originalName || 'PDF seleccionado';
-  const confirmed = window.confirm(
-    `Queres mover la pagina ${pageNumber} a la posicion ${targetPageNumber} en "${filename}"? Esta accion crea una nueva version del PDF.`,
+  const confirmed = await confirmDialog(
+    `¿Querés mover la página ${pageNumber} a la posición ${targetPageNumber} en "${filename}"? Esta acción crea una nueva versión del PDF.`,
+    { title: 'Mover página', confirmLabel: 'Mover página' },
   );
   if (!confirmed) return;
 
@@ -1721,19 +1874,13 @@ async function removeUploadedFileFromSolicitud(id, originalIndex) {
   }
 
   const filename = file.name || file.originalName || 'archivo adjunto';
-  const confirmed = window.confirm(
+  const confirmed = await confirmDialog(
     `¿Querés quitar "${filename}" de esta solicitud? El archivo no se incluirá en el PDF unificado.`,
+    { title: 'Quitar archivo', confirmLabel: 'Quitar archivo', danger: true },
   );
   if (!confirmed) return;
 
   const actor = currentUser?.email || 'mesa de ayuda prestacional';
-  const now = new Date().toISOString();
-  const nextFiles = currentFiles
-    .filter((_, index) => index !== originalIndex)
-    .map((entry, index) => ({
-      ...entry,
-      order: index + 1,
-    }));
 
   try {
     await callAdminFunction('adminRemoveObraSocialSolicitudFile', {
@@ -1766,16 +1913,18 @@ async function deleteMessageFromInbox(id) {
   const item = solicitudes.find((entry) => entry.id === id);
   const title = doctorName(item) || patientName(item) || shortId(id);
   const singleWarning = canDeleteWithSingleWarning(item);
-  const confirmed = window.confirm(
+  const confirmed = await confirmDialog(
     singleWarning
-      ? `Vas a eliminar "${title}" de la bandeja. El mensaje ya no tiene prioridad. Continuar?`
-      : `Seguro que queres eliminar "${title}" de la bandeja de prestacional?`,
+      ? `Vas a eliminar "${title}" de la bandeja. El mensaje ya no tiene prioridad.`
+      : `¿Seguro que querés eliminar "${title}" de la bandeja de prestacional?`,
+    { title: 'Eliminar de la bandeja', confirmLabel: 'Eliminar', danger: true },
   );
   if (!confirmed) return;
 
   if (!singleWarning) {
-    const finalConfirmation = window.confirm(
-      'Confirmacion final: esta solicitud todavia tiene prioridad. El historial se conserva en Firebase. Eliminar igual?',
+    const finalConfirmation = await confirmDialog(
+      'Esta solicitud todavía tiene prioridad. El historial se conserva en Firebase. ¿Eliminar igual?',
+      { title: 'Confirmación final', confirmLabel: 'Eliminar igual', danger: true },
     );
     if (!finalConfirmation) return;
   }
@@ -1817,8 +1966,9 @@ async function removeSelectedFilesFromSolicitud(id) {
   const names = selected
     .map((index) => currentFiles[index]?.name || currentFiles[index]?.originalName || `archivo ${index + 1}`)
     .filter(Boolean);
-  const confirmed = window.confirm(
-    `Vas a quitar ${selected.length} archivo${selected.length === 1 ? '' : 's'} de esta solicitud:\n\n${names.join('\n')}\n\nEl PDF unificado debera regenerarse. Continuar?`,
+  const confirmed = await confirmDialog(
+    `Vas a quitar ${selected.length} archivo${selected.length === 1 ? '' : 's'} de esta solicitud:\n\n${names.join('\n')}\n\nEl PDF unificado deberá regenerarse.`,
+    { title: 'Quitar archivos', confirmLabel: 'Quitar', danger: true },
   );
   if (!confirmed) return;
 
@@ -1849,6 +1999,7 @@ async function removeSelectedFilesFromSolicitud(id) {
     setFeedback(
       id,
       'upload',
+      failed ? 'warning' : 'success',
       failed
         ? `Se quitaron ${deleted} archivo${deleted === 1 ? '' : 's'}. Fallaron ${failed}.`
         : `Se quitaron ${deleted} archivo${deleted === 1 ? '' : 's'}. Regenera el PDF unificado.`,
@@ -1926,16 +2077,18 @@ async function deleteSelectedMessages() {
   const oldCount = items.filter(isOldInboxSolicitud).length;
   const lowPriorityLabel = `${expiredCount} vencido${expiredCount === 1 ? '' : 's'}, ${oldCount} con mas de 30 dias`;
 
-  const confirmed = window.confirm(
+  const confirmed = await confirmDialog(
     allSingleWarning
-      ? `Vas a eliminar ${countLabel} de la bandeja. Ya no tienen prioridad. Continuar?`
-      : `Vas a eliminar ${countLabel} de la bandeja (${lowPriorityLabel}). Continuar?`,
+      ? `Vas a eliminar ${countLabel} de la bandeja. Ya no tienen prioridad.`
+      : `Vas a eliminar ${countLabel} de la bandeja (${lowPriorityLabel}).`,
+    { title: 'Eliminar en lote', confirmLabel: 'Eliminar', danger: true },
   );
   if (!confirmed) return;
 
   if (!allSingleWarning) {
-    const finalConfirmation = window.confirm(
-      'Confirmacion final: algunos mensajes todavia tienen prioridad. El historial se conserva en Firebase. Eliminar igual?',
+    const finalConfirmation = await confirmDialog(
+      'Algunos mensajes todavía tienen prioridad. El historial se conserva en Firebase. ¿Eliminar igual?',
+      { title: 'Confirmación final', confirmLabel: 'Eliminar igual', danger: true },
     );
     if (!finalConfirmation) return;
   }
@@ -1974,25 +2127,22 @@ async function deleteSelectedMessages() {
   await refreshSolicitudes({ silent: true });
 }
 async function refreshSolicitudes(options = {}) {
-  const previousText = refreshButton.textContent;
   refreshButton.disabled = true;
-  if (!options.silent) refreshButton.textContent = 'Actualizando...';
   try {
     const data = await callAdminFunction('adminListObraSocialSolicitudes');
     const preserveDetail = options.silent && Boolean(selectedId);
     solicitudes = Array.isArray(data.items) ? data.items : [];
     render({ preserveDetail });
-    if (!options.silent) showTopbarFeedback('Lista actualizada.');
+    if (!options.silent) showToast('Lista actualizada.');
   } catch (error) {
     if (!options.silent) {
-      showTopbarFeedback(
+      showToast(
         firestoreErrorMessage(error, 'No se pudo actualizar la lista.'),
         'error',
       );
     }
   } finally {
     refreshButton.disabled = false;
-    if (!options.silent) refreshButton.textContent = previousText;
   }
 }
 
@@ -2045,14 +2195,25 @@ function setFeedback(id, key, type, message) {
   });
 }
 
+const feedbackIcons = {
+  info: 'clock',
+  success: 'check-circle',
+  warning: 'alert',
+  error: 'alert',
+};
+
+function feedbackBox(type, message) {
+  return `
+    <div class="feedback-message feedback-${type}" role="status">
+      ${icon(feedbackIcons[type] || 'clock')}<span>${escapeHtml(message)}</span>
+    </div>
+  `;
+}
+
 function feedbackHtml(id, key) {
   const feedback = feedbackById.get(id)?.[key];
   if (!feedback) return '';
-  return `
-    <div class="feedback-message feedback-${feedback.type}" role="status">
-      ${escapeHtml(feedback.message)}
-    </div>
-  `;
+  return feedbackBox(feedback.type, feedback.message);
 }
 
 function notificationStatusHtml(item) {
@@ -2062,7 +2223,7 @@ function notificationStatusHtml(item) {
   const labels = {
     pending: {
       type: 'info',
-      message: 'Notificación pendiente: Se está procesando el envío.',
+      message: 'Notificación pendiente: se está procesando el envío.',
     },
     sent: {
       type: 'success',
@@ -2082,17 +2243,13 @@ function notificationStatusHtml(item) {
     type: 'info',
     message: `Estado de notificación: ${status}`,
   };
-  return `
-    <div class="feedback-message feedback-${detail.type}" role="status">
-      ${escapeHtml(detail.message)}
-    </div>
-  `;
+  return feedbackBox(detail.type, detail.message);
 }
 
 function mergeButtonLabel(item) {
-  if (mergeInProgressIds.has(item.id)) return 'Unificando...';
+  if (mergeInProgressIds.has(item.id)) return 'Unificando…';
   const status = item.merge?.status;
-  if (status === 'processing') return 'Unificando...';
+  if (status === 'processing') return 'Unificando…';
   if (status === 'done') return 'Regenerar PDF unificado';
   return 'Unificar archivos en PDF';
 }
@@ -2106,8 +2263,8 @@ function mergeButtonDisabled(item) {
 
 function uploadButtonLabel(item) {
   return uploadInProgressIds.has(item.id)
-    ? 'Subiendo archivo...'
-    : 'Agregar archivo a la solicitud';
+    ? 'Subiendo archivo…'
+    : 'Agregar a la solicitud';
 }
 
 function uploadButtonDisabled(item) {
@@ -2119,55 +2276,24 @@ function uploadButtonDisabled(item) {
 function mergeStatusHtml(item) {
   const merge = item.merge || {};
   if (merge.status === 'done') {
-    return `
-      <div class="feedback-message feedback-success" role="status">
-        PDF unificado listo. ${merge.sizeBytes ? `Tamaño: ${formatBytes(merge.sizeBytes)}.` : ''}
-      </div>
-    `;
+    return feedbackBox(
+      'success',
+      `PDF unificado listo.${merge.sizeBytes ? ` Tamaño: ${formatBytes(merge.sizeBytes)}.` : ''}`,
+    );
   }
   if (merge.status === 'processing') {
-    return `
-      <div class="feedback-message feedback-info" role="status">
-        El PDF unificado se está generando.
-      </div>
-    `;
+    return feedbackBox('info', 'El PDF unificado se está generando.');
   }
   if (merge.status === 'error') {
-    return `
-      <div class="feedback-message feedback-error" role="status">
-        ${escapeHtml(merge.error || 'Falló la generación del PDF unificado.')}
-      </div>
-    `;
+    return feedbackBox('error', merge.error || 'Falló la generación del PDF unificado.');
   }
   if (merge.required) {
-    return `
-      <div class="feedback-message feedback-warning" role="status">
-        Esta solicitud necesita un PDF unificado antes de cargarla al sistema externo.
-      </div>
-    `;
+    return feedbackBox(
+      'warning',
+      'Esta solicitud necesita un PDF unificado antes de cargarla al sistema externo.',
+    );
   }
-  return `
-    <div class="feedback-message feedback-info" role="status">
-      Aunque tenga un solo archivo, podés generar un PDF final para dejar el flujo uniforme.
-    </div>
-  `;
-}
-
-function showTopbarFeedback(message, type = 'success') {
-  let node = document.querySelector('#topbarFeedback');
-  if (!node) {
-    node = document.createElement('span');
-    node.id = 'topbarFeedback';
-    node.className = 'topbar-feedback';
-    refreshButton.insertAdjacentElement('afterend', node);
-  }
-  node.textContent = message;
-  node.className = `topbar-feedback topbar-feedback-${type}`;
-  window.clearTimeout(showTopbarFeedback.timeoutId);
-  showTopbarFeedback.timeoutId = window.setTimeout(() => {
-    node.textContent = '';
-    node.className = 'topbar-feedback';
-  }, 3500);
+  return `<p class="hint">Aunque tenga un solo archivo, podés generar un PDF final para dejar el flujo uniforme.</p>`;
 }
 
 function firestoreErrorMessage(error, fallback) {
@@ -2223,18 +2349,27 @@ function normalizedFilesFromItem(item, options = {}) {
 }
 
 function renderHistory(history = []) {
-  if (!history.length) return '<ul class="history-list"></ul>';
+  const entries = history
+    .slice()
+    .reverse()
+    .map(
+      (entry) => `
+        <li>
+          <span>${escapeHtml(entry.note || entry.action || '')}</span>
+          <span class="history-meta"><strong>${escapeHtml(entry.actor || 'Sistema')}</strong> · ${formatDateTime(entry.at)}</span>
+        </li>
+      `,
+    )
+    .join('');
   return `
-    <ul class="history-list">
-      ${history
-        .slice()
-        .reverse()
-        .map(
-          (entry) =>
-            `<li><strong>${escapeHtml(entry.actor || 'Sistema')}</strong> · ${formatDateTime(entry.at)}<br />${escapeHtml(entry.note || entry.action || '')}</li>`,
-        )
-        .join('')}
-    </ul>
+    <section class="card">
+      <div class="card-head">
+        <h3>${icon('history')}Historial</h3>
+      </div>
+      <div class="card-body">
+        ${entries ? `<ul class="history-list">${entries}</ul>` : '<p>Sin movimientos registrados.</p>'}
+      </div>
+    </section>
   `;
 }
 
@@ -2247,64 +2382,75 @@ function metadataEditedBadge(item) {
   const metadata = item?.metadataPrestacional || {};
   if (metadata.editada !== true) return '';
   const author = metadata.editadaPor || metadata.editadaEmail || 'prestacional';
-  return `<span class="metadata-edited-badge" title="Modificado por ${escapeHtml(author)}">✓ Datos modificados</span>`;
+  return `<span class="metadata-edited-badge" title="Modificado por ${escapeHtml(author)}">${icon('check')}Datos modificados</span>`;
 }
 
 function renderMetadataPanel(item) {
   const editing = metadataEditIds.has(item.id);
   const saving = metadataSaveInProgressIds.has(item.id);
+  const disabled = saving ? 'disabled' : '';
   if (!editing) {
     return `
-      <div class="detail-grid metadata-grid">
-        ${infoItem('Fecha practica', formatDate(item.fechaPractica))}
-        ${infoItem('Vence', formatDate(resolveFechaVencimiento(item)))}
-        ${infoItem('Paciente', patientName(item))}
-        ${infoItem('Matricula / Codme', item.socio?.matricula || item.codme || '-')}
-        ${infoItem('Merge PDF', mergeLabel(item.merge))}
-        ${infoItem('Creada', formatDateTime(item.createdAt))}
-        <div class="info-item info-item-action">
-          <span>Datos</span>
-          ${metadataEditedBadge(item)}
-          <button id="editMetadataButton" class="secondary-button compact" type="button">
-            Editar datos
+      <section class="card metadata-card">
+        <div class="card-head">
+          <h3>${icon('file')}Datos de la solicitud ${metadataEditedBadge(item)}</h3>
+          <button id="editMetadataButton" class="btn btn-ghost btn-sm" type="button">
+            ${icon('pencil')}Editar datos
           </button>
         </div>
-        ${feedbackHtml(item.id, 'metadata')}
-      </div>
+        <div class="card-body">
+          <div class="metadata-grid">
+            ${infoItem('Fecha de práctica', formatDate(item.fechaPractica))}
+            ${infoItem('Vence', formatDate(resolveFechaVencimiento(item)))}
+            ${infoItem('Paciente', patientName(item))}
+            ${infoItem('Matrícula / Codme', item.socio?.matricula || item.codme || '-')}
+            ${infoItem('PDF unificado', mergeLabel(item.merge))}
+            ${infoItem('Creada', formatDateTime(item.createdAt))}
+          </div>
+          ${feedbackHtml(item.id, 'metadata')}
+        </div>
+      </section>
     `;
   }
 
   return `
-    <form id="metadataEditForm" class="metadata-edit-form">
-      <label>
-        <span>Medico</span>
-        <input id="metadataMedicoInput" type="text" value="${escapeHtml(doctorName(item))}" ${saving ? 'disabled' : ''} />
-      </label>
-      <label>
-        <span>Paciente</span>
-        <input id="metadataPacienteInput" type="text" value="${escapeHtml(patientName(item))}" ${saving ? 'disabled' : ''} />
-      </label>
-      <label>
-        <span>Fecha practica</span>
-        <input id="metadataFechaInput" type="date" value="${dateInputValue(item.fechaPractica)}" ${saving ? 'disabled' : ''} />
-      </label>
-      <label>
-        <span>Matricula / Codme</span>
-        <input id="metadataMatriculaInput" type="text" value="${escapeHtml(item.socio?.matricula || item.codme || '')}" ${saving ? 'disabled' : ''} />
-      </label>
-      <div class="metadata-edit-note">
-        El vencimiento se recalcula automaticamente desde la fecha de practica.
+    <section class="card metadata-card">
+      <div class="card-head">
+        <h3>${icon('pencil')}Editar datos de la solicitud</h3>
       </div>
-      <div class="metadata-edit-actions">
-        <button id="saveMetadataButton" class="primary-button compact" type="submit" ${saving ? 'disabled' : ''}>
-          ${saving ? 'Guardando...' : 'Guardar cambios'}
-        </button>
-        <button id="cancelMetadataEditButton" class="secondary-button compact" type="button" ${saving ? 'disabled' : ''}>
-          Cancelar
-        </button>
+      <div class="card-body">
+        <form id="metadataEditForm" class="metadata-edit-form">
+          <label class="field">
+            <span>Médico</span>
+            <input id="metadataMedicoInput" type="text" value="${escapeHtml(doctorName(item))}" ${disabled} />
+          </label>
+          <label class="field">
+            <span>Paciente</span>
+            <input id="metadataPacienteInput" type="text" value="${escapeHtml(patientName(item))}" ${disabled} />
+          </label>
+          <label class="field">
+            <span>Fecha de práctica</span>
+            <input id="metadataFechaInput" type="date" value="${dateInputValue(item.fechaPractica)}" ${disabled} />
+          </label>
+          <label class="field">
+            <span>Matrícula / Codme</span>
+            <input id="metadataMatriculaInput" type="text" value="${escapeHtml(item.socio?.matricula || item.codme || '')}" ${disabled} />
+          </label>
+          <p class="metadata-edit-note">
+            El vencimiento se recalcula automáticamente desde la fecha de práctica.
+          </p>
+          <div class="metadata-edit-actions">
+            <button id="saveMetadataButton" class="btn btn-primary btn-sm" type="submit" ${disabled}>
+              ${icon('check')}${saving ? 'Guardando…' : 'Guardar cambios'}
+            </button>
+            <button id="cancelMetadataEditButton" class="btn btn-ghost btn-sm" type="button" ${disabled}>
+              Cancelar
+            </button>
+          </div>
+          ${feedbackHtml(item.id, 'metadata')}
+        </form>
       </div>
-      ${feedbackHtml(item.id, 'metadata')}
-    </form>
+    </section>
   `;
 }
 
@@ -2323,21 +2469,22 @@ function renderCompleteReviewControl(item) {
   const reviewer = reviewed.revisadaPor || reviewed.revisadaEmail || 'mesa prestacional';
   const reviewedAt = reviewed.revisadaAt ? formatDateTime(reviewed.revisadaAt) : '';
   return `
-    <div class="complete-box">
-      <div>
-        <p class="eyebrow">Revision prestacional</p>
-        <h3>${completed ? 'Documentacion completada' : 'Marcar como completada'}</h3>
+    <section class="card complete-card ${completed ? 'is-done' : ''}">
+      <div class="card-head">
+        <h3>${icon('check-circle')}${completed ? 'Documentación completada' : 'Revisión prestacional'}</h3>
+      </div>
+      <div class="card-body">
         <p>
           ${completed
-            ? `Ya fue revisada por ${escapeHtml(reviewer)}${reviewedAt ? ` el ${reviewedAt}` : ''}. Queda al final de la bandeja.`
-            : 'Usalo cuando la documentacion ya fue revisada y esta lista para seguir el proceso.'}
+            ? `Revisada por ${escapeHtml(reviewer)}${reviewedAt ? ` el ${reviewedAt}` : ''}. Queda al final de la bandeja.`
+            : 'Usalo cuando la documentación ya fue revisada y está lista para seguir el proceso.'}
         </p>
+        <button id="completeReviewButton" class="btn btn-success" type="button" ${completed ? 'disabled' : ''}>
+          ${icon('check')}${completed ? 'Completada' : 'Marcar como completada'}
+        </button>
+        ${feedbackHtml(item.id, 'complete')}
       </div>
-      <button id="completeReviewButton" class="primary-button" type="button" ${completed ? 'disabled' : ''}>
-        ${completed ? 'Completada' : 'Marcar como completada'}
-      </button>
-      ${feedbackHtml(item.id, 'complete')}
-    </div>
+    </section>
   `;
 }
 
@@ -2348,8 +2495,9 @@ function renderUploadObservations(value) {
   return `
     <details class="upload-observations">
       <summary>
-        <span>Observaciones enviadas</span>
-        <strong>Ver observaciones</strong>
+        ${icon('message')}
+        <span>Observaciones enviadas por el médico</span>
+        ${icon('chevron-down')}
       </summary>
       <p>${escapeHtml(text)}</p>
     </details>

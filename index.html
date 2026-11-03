@@ -5,11 +5,62 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Mesa de Ayuda Prestacional | CMT</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 
 <body>
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /></symbol>
+    <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" /><path d="m8 12.5 2.5 2.5L16 9.5" /></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16" /><path d="M3 21v-5h5" /><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8" /><path d="M21 3v5h-5" /></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></symbol>
+    <symbol id="i-sort" viewBox="0 0 24 24"><path d="M3 6h13M3 12h9M3 18h5" /><path d="M18 9v12M15 18l3 3 3-3" /></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" /><path d="M12 7v5l3 2" /></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.4 12s3.5-6.2 9.6-6.2S21.6 12 21.6 12s-3.5 6.2-9.6 6.2S2.4 12 2.4 12z" /><circle cx="12" cy="12" r="2.8" /></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" /></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z" /><path d="m2 17 10 5 10-5" /><path d="m2 12 10 5 10-5" /></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m17 8-5-5-5 5" /><path d="M12 3v12" /></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" /></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M10 11v6M14 11v6" /></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z" /></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z" /><path d="M22 2 11 13" /></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" /></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+    <symbol id="i-move" viewBox="0 0 24 24"><path d="M7 4v16M7 20l-3-3M7 20l3-3" /><path d="M17 20V4M17 4l-3 3M17 4l3 3" /></symbol>
+    <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12" /></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></symbol>
+    <symbol id="i-square-check" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3" /><path d="m8 12 3 3 5-6" /></symbol>
+  </svg>
+
   <section id="authView" class="auth-view is-hidden">
+    <div class="auth-brand">
+      <div class="brand-mark brand-mark-lg" aria-hidden="true">CMT</div>
+      <div>
+        <p class="auth-brand-kicker">Colegio Médico Tucumán</p>
+        <h2>Gestión prestacional, ordenada y a tiempo.</h2>
+        <ul class="auth-brand-list">
+          <li><svg class="icon"><use href="#i-clock" /></svg>Priorización automática por vencimiento</li>
+          <li><svg class="icon"><use href="#i-layers" /></svg>Unificación y edición de PDFs en un solo lugar</li>
+          <li><svg class="icon"><use href="#i-send" /></svg>Avisos directos al médico desde la bandeja</li>
+        </ul>
+      </div>
+    </div>
     <form id="loginForm" class="auth-panel">
       <p class="eyebrow">Panel interno</p>
       <h1>Mesa de Ayuda Prestacional</h1>
@@ -17,19 +68,19 @@
         Ingresá con el usuario autorizado para revisar solicitudes y
         documentación.
       </p>
-      <label>
-        Email
-        <input id="emailInput" type="email" autocomplete="email" required />
+      <label class="field">
+        <span>Email</span>
+        <input id="emailInput" type="email" autocomplete="email" placeholder="nombre@colegiomedicotucuman.com.ar" required />
       </label>
-      <label>
-        Contraseña
-        <input id="passwordInput" type="password" autocomplete="current-password" required />
+      <label class="field">
+        <span>Contraseña</span>
+        <input id="passwordInput" type="password" autocomplete="current-password" placeholder="••••••••" required />
       </label>
-      <button type="submit">Ingresar</button>
+      <button type="submit" class="btn btn-primary btn-block">Ingresar</button>
       <div class="auth-divider">
         <span>o</span>
       </div>
-      <button id="googleLoginButton" class="google-auth-button" type="button">
+      <button id="googleLoginButton" class="btn btn-secondary btn-block" type="button">
         <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" />
         Ingresar con Google
       </button>
@@ -39,93 +90,120 @@
 
   <main id="appView" class="app-shell is-hidden">
     <header class="topbar">
-      <div>
-        <p class="eyebrow">Mesa de Ayuda Prestacional</p>
-        <h1>Bandeja de documentación</h1>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">CMT</div>
+        <div class="brand-text">
+          <strong>Mesa de Ayuda Prestacional</strong>
+          <span>Bandeja de documentación</span>
+        </div>
       </div>
+
+      <nav class="inbox-tabs" role="tablist" aria-label="Secciones de la bandeja">
+        <button class="inbox-tab is-active" type="button" role="tab" data-inbox-tab="documentacion" aria-selected="true">
+          <svg class="icon"><use href="#i-inbox" /></svg>
+          <span>Documentación</span>
+          <span class="tab-count" data-tab-count="documentacion">0</span>
+        </button>
+        <button class="inbox-tab" type="button" role="tab" data-inbox-tab="correcciones" aria-selected="false">
+          <svg class="icon"><use href="#i-rotate" /></svg>
+          <span>Correcciones</span>
+          <span class="tab-count" data-tab-count="correcciones">0</span>
+        </button>
+        <button class="inbox-tab" type="button" role="tab" data-inbox-tab="listas" aria-selected="false">
+          <svg class="icon"><use href="#i-check-circle" /></svg>
+          <span>Listas para cargar</span>
+          <span class="tab-count" data-tab-count="listas">0</span>
+        </button>
+      </nav>
+
       <div class="topbar-actions">
-        <span id="userEmail" class="session-chip"></span>
-        <button id="refreshButton" class="ghost-button" type="button">
-          Actualizar
+        <button id="refreshButton" class="icon-button" type="button" title="Actualizar lista" aria-label="Actualizar lista">
+          <svg class="icon"><use href="#i-refresh" /></svg>
         </button>
-        <button id="themeToggle" class="theme-toggle" type="button" aria-pressed="false">
-          Modo oscuro
+        <button id="themeToggle" class="icon-button" type="button" aria-pressed="false" title="Cambiar tema" aria-label="Cambiar tema">
+          <svg class="icon"><use href="#i-moon" /></svg>
         </button>
-        <button id="logoutButton" class="ghost-button" type="button">
-          Salir
+        <div class="session-chip">
+          <span id="userAvatar" class="user-avatar" aria-hidden="true">?</span>
+          <span id="userEmail" class="session-email"></span>
+        </div>
+        <button id="logoutButton" class="icon-button" type="button" title="Cerrar sesión" aria-label="Cerrar sesión">
+          <svg class="icon"><use href="#i-logout" /></svg>
         </button>
       </div>
     </header>
 
-    <nav class="inbox-tabs" aria-label="Secciones de la bandeja">
-      <button class="inbox-tab is-active" type="button" data-inbox-tab="documentacion" aria-selected="true">
-        Documentación
-      </button>
-      <button class="inbox-tab" type="button" data-inbox-tab="correcciones" aria-selected="false">
-        Correcciones
-      </button>
-      <button class="inbox-tab" type="button" data-inbox-tab="listas" aria-selected="false">
-        Listas para cargar
-      </button>
-    </nav>
-
-    <section class="stats-grid" aria-label="Resumen de solicitudes">
-      <article>
-        <span id="statTotal">0</span>
-        <p>Total pendientes</p>
-      </article>
-      <article>
-        <span id="statUrgent">0</span>
-        <p>Vencen pronto</p>
-      </article>
-      <article>
-        <span id="statReady">0</span>
-        <p>Listas para cargar</p>
-      </article>
-    </section>
-
     <section class="workspace">
       <aside class="queue-panel">
+        <section class="stats-grid" aria-label="Resumen de solicitudes">
+          <article class="stat stat-total">
+            <span class="stat-icon"><svg class="icon"><use href="#i-inbox" /></svg></span>
+            <div>
+              <span id="statTotal" class="stat-value">0</span>
+              <p>Total pendientes</p>
+            </div>
+          </article>
+          <article class="stat stat-urgent">
+            <span class="stat-icon"><svg class="icon"><use href="#i-alert" /></svg></span>
+            <div>
+              <span id="statUrgent" class="stat-value">0</span>
+              <p>Vencen pronto</p>
+            </div>
+          </article>
+          <article class="stat stat-ready">
+            <span class="stat-icon"><svg class="icon"><use href="#i-check-circle" /></svg></span>
+            <div>
+              <span id="statReady" class="stat-value">0</span>
+              <p>Listas para cargar</p>
+            </div>
+          </article>
+        </section>
+
         <div class="filters">
-          <label>
-            Buscar
-            <input id="searchInput" type="search" placeholder="Médico, paciente, matrícula..." />
+          <label class="search-field">
+            <svg class="icon"><use href="#i-search" /></svg>
+            <input id="searchInput" type="search" placeholder="Médico, paciente, matrícula…" aria-label="Buscar" />
+            <kbd class="search-kbd" aria-hidden="true">/</kbd>
           </label>
-          <button id="dueSortButton" class="sort-toggle-button" type="button" aria-pressed="false">
-            Ordenar por vencimiento próximo
+          <button id="dueSortButton" class="chip-toggle" type="button" aria-pressed="false" title="Ordenar por vencimiento próximo">
+            <svg class="icon"><use href="#i-sort" /></svg>
+            <span>Vencimiento</span>
           </button>
         </div>
 
         <div id="bulkActions" class="bulk-actions">
-          <div>
+          <div class="bulk-summary">
             <strong id="bulkSelectedCount">0 seleccionadas</strong>
             <span id="bulkSelectedHint">Elegí mensajes para operar en lote.</span>
           </div>
           <div class="bulk-action-buttons">
-            <button id="selectVisibleButton" class="ghost-button" type="button">
+            <button id="selectVisibleButton" class="btn btn-ghost btn-sm" type="button">
               Seleccionar visibles
             </button>
-            <button id="selectExpiredButton" class="ghost-button" type="button">
+            <button id="selectExpiredButton" class="btn btn-ghost btn-sm" type="button">
               Seleccionar vencidas
             </button>
-            <button id="clearSelectionButton" class="ghost-button" type="button">
+            <button id="clearSelectionButton" class="btn btn-ghost btn-sm" type="button">
               Limpiar
             </button>
-            <button id="deleteSelectedButton" class="danger-inline-button" type="button">
-              Eliminar seleccionadas
+            <button id="deleteSelectedButton" class="btn btn-danger-soft btn-sm" type="button">
+              <svg class="icon"><use href="#i-trash" /></svg>
+              Eliminar
             </button>
           </div>
           <p id="bulkFeedback" class="bulk-feedback" role="status"></p>
         </div>
 
         <div id="queueList" class="queue-list" aria-live="polite"></div>
-        <p id="emptyState" class="empty-state is-hidden">
-          No hay solicitudes para este filtro.
-        </p>
+        <div id="emptyState" class="empty-state is-hidden">
+          <svg class="icon"><use href="#i-inbox" /></svg>
+          <p>No hay solicitudes para este filtro.</p>
+        </div>
       </aside>
 
       <section id="detailPanel" class="detail-panel">
         <div class="placeholder">
+          <svg class="icon"><use href="#i-file" /></svg>
           <h2>Seleccioná una solicitud</h2>
           <p>
             La documentación, los archivos y el seguimiento aparecerán en este
@@ -136,19 +214,37 @@
     </section>
   </main>
 
+  <dialog id="confirmDialog" class="confirm-dialog">
+    <form method="dialog">
+      <div class="confirm-icon" aria-hidden="true">
+        <svg class="icon"><use href="#i-alert" /></svg>
+      </div>
+      <h3 id="confirmTitle">Confirmar acción</h3>
+      <p id="confirmMessage"></p>
+      <div class="confirm-actions">
+        <button value="cancel" class="btn btn-secondary" type="submit">Cancelar</button>
+        <button id="confirmAccept" value="ok" class="btn btn-primary" type="submit">Confirmar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toastRegion" class="toast-region" role="status" aria-live="polite"></div>
+
   <template id="queueItemTemplate">
     <div class="queue-row">
       <label class="queue-check">
         <input class="queue-select" type="checkbox" />
-        <span>Seleccionar</span>
+        <span class="sr-only">Seleccionar</span>
       </label>
       <button class="queue-item" type="button">
-        <div class="queue-item-main">
+        <div class="queue-item-top">
+          <span class="unread-dot" aria-hidden="true"></span>
           <strong class="queue-title"></strong>
-          <span class="queue-subtitle"></span>
-        </div>
-        <div class="queue-meta">
           <span class="priority-pill"></span>
+        </div>
+        <span class="queue-subtitle"></span>
+        <div class="queue-dates"></div>
+        <div class="queue-meta">
           <span class="status-pill"></span>
         </div>
       </button>
