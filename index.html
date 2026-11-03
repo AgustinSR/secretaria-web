@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mesa de Ayuda Prestacional | CMT</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+  <section id="authView" class="auth-view is-hidden">
+    <form id="loginForm" class="auth-panel">
+      <p class="eyebrow">Panel interno</p>
+      <h1>Mesa de Ayuda Prestacional</h1>
+      <p class="muted">
+        Ingresá con el usuario autorizado para revisar solicitudes y
+        documentación.
+      </p>
+      <label>
+        Email
+        <input id="emailInput" type="email" autocomplete="email" required />
+      </label>
+      <label>
+        Contraseña
+        <input id="passwordInput" type="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit">Ingresar</button>
+      <div class="auth-divider">
+        <span>o</span>
+      </div>
+      <button id="googleLoginButton" class="google-auth-button" type="button">
+        <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" />
+        Ingresar con Google
+      </button>
+      <p id="authError" class="error-text" role="alert"></p>
+    </form>
+  </section>
+
+  <main id="appView" class="app-shell is-hidden">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Mesa de Ayuda Prestacional</p>
+        <h1>Bandeja de documentación</h1>
+      </div>
+      <div class="topbar-actions">
+        <span id="userEmail" class="session-chip"></span>
+        <button id="refreshButton" class="ghost-button" type="button">
+          Actualizar
+        </button>
+        <button id="themeToggle" class="theme-toggle" type="button" aria-pressed="false">
+          Modo oscuro
+        </button>
+        <button id="logoutButton" class="ghost-button" type="button">
+          Salir
+        </button>
+      </div>
+    </header>
+
+    <nav class="inbox-tabs" aria-label="Secciones de la bandeja">
+      <button class="inbox-tab is-active" type="button" data-inbox-tab="documentacion" aria-selected="true">
+        Documentación
+      </button>
+      <button class="inbox-tab" type="button" data-inbox-tab="correcciones" aria-selected="false">
+        Correcciones
+      </button>
+      <button class="inbox-tab" type="button" data-inbox-tab="listas" aria-selected="false">
+        Listas para cargar
+      </button>
+    </nav>
+
+    <section class="stats-grid" aria-label="Resumen de solicitudes">
+      <article>
+        <span id="statTotal">0</span>
+        <p>Total pendientes</p>
+      </article>
+      <article>
+        <span id="statUrgent">0</span>
+        <p>Vencen pronto</p>
+      </article>
+      <article>
+        <span id="statReady">0</span>
+        <p>Listas para cargar</p>
+      </article>
+    </section>
+
+    <section class="workspace">
+      <aside class="queue-panel">
+        <div class="filters">
+          <label>
+            Buscar
+            <input id="searchInput" type="search" placeholder="Médico, paciente, matrícula..." />
+          </label>
+          <button id="dueSortButton" class="sort-toggle-button" type="button" aria-pressed="false">
+            Ordenar por vencimiento próximo
+          </button>
+        </div>
+
+        <div id="bulkActions" class="bulk-actions">
+          <div>
+            <strong id="bulkSelectedCount">0 seleccionadas</strong>
+            <span id="bulkSelectedHint">Elegí mensajes para operar en lote.</span>
+          </div>
+          <div class="bulk-action-buttons">
+            <button id="selectVisibleButton" class="ghost-button" type="button">
+              Seleccionar visibles
+            </button>
+            <button id="selectExpiredButton" class="ghost-button" type="button">
+              Seleccionar vencidas
+            </button>
+            <button id="clearSelectionButton" class="ghost-button" type="button">
+              Limpiar
+            </button>
+            <button id="deleteSelectedButton" class="danger-inline-button" type="button">
+              Eliminar seleccionadas
+            </button>
+          </div>
+          <p id="bulkFeedback" class="bulk-feedback" role="status"></p>
+        </div>
+
+        <div id="queueList" class="queue-list" aria-live="polite"></div>
+        <p id="emptyState" class="empty-state is-hidden">
+          No hay solicitudes para este filtro.
+        </p>
+      </aside>
+
+      <section id="detailPanel" class="detail-panel">
+        <div class="placeholder">
+          <h2>Seleccioná una solicitud</h2>
+          <p>
+            La documentación, los archivos y el seguimiento aparecerán en este
+            panel.
+          </p>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <template id="queueItemTemplate">
+    <div class="queue-row">
+      <label class="queue-check">
+        <input class="queue-select" type="checkbox" />
+        <span>Seleccionar</span>
+      </label>
+      <button class="queue-item" type="button">
+        <div class="queue-item-main">
+          <strong class="queue-title"></strong>
+          <span class="queue-subtitle"></span>
+        </div>
+        <div class="queue-meta">
+          <span class="priority-pill"></span>
+          <span class="status-pill"></span>
+        </div>
+      </button>
+    </div>
+  </template>
+
+  <script type="module" src="./app.js"></script>
+</body>
+
+</html>

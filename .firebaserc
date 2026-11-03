@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "colemed-468f1"
+  },
+  "targets": {
+    "colemed-468f1": {
+      "hosting": {
+        "prestacional": [
+          "colemed-prestacional"
+        ]
+      }
+    }
+  }
+}

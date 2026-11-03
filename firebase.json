@@ -1,0 +1,18 @@
+{
+  "hosting": {
+    "target": "prestacional",
+    "public": "dist",
+    "ignore": ["firebase.json", "README.md", "**/.*", "node_modules/**"],
+    "headers": [
+      {
+        "source": "**/*.@(js|css)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      }
+    ]
+  }
+}

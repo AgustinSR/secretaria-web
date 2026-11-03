@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.firebase/
+_respaldo_original/
+*.log
+.DS_Store
+Thumbs.db
