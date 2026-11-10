@@ -45,6 +45,8 @@
     <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12" /></symbol>
     <symbol id="i-message" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></symbol>
     <symbol id="i-square-check" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3" /><path d="m8 12 3 3 5-6" /></symbol>
   </svg>
 
@@ -114,6 +116,11 @@
           <span>Listas para cargar</span>
           <span class="tab-count" data-tab-count="listas">0</span>
         </button>
+        <button class="inbox-tab" type="button" role="tab" data-inbox-tab="papelera" aria-selected="false">
+          <svg class="icon"><use href="#i-trash" /></svg>
+          <span>Papelera</span>
+          <span class="tab-count" data-tab-count="papelera">0</span>
+        </button>
       </nav>
 
       <div class="topbar-actions">
@@ -140,7 +147,7 @@
             <span class="stat-icon"><svg class="icon"><use href="#i-inbox" /></svg></span>
             <div>
               <span id="statTotal" class="stat-value">0</span>
-              <p>Total pendientes</p>
+              <p>Pendientes</p>
             </div>
           </article>
           <article class="stat stat-urgent">
@@ -150,11 +157,11 @@
               <p>Vencen pronto</p>
             </div>
           </article>
-          <article class="stat stat-ready">
-            <span class="stat-icon"><svg class="icon"><use href="#i-check-circle" /></svg></span>
+          <article class="stat stat-unread">
+            <span class="stat-icon"><svg class="icon"><use href="#i-eye" /></svg></span>
             <div>
-              <span id="statReady" class="stat-value">0</span>
-              <p>Listas para cargar</p>
+              <span id="statUnread" class="stat-value">0</span>
+              <p>Sin abrir</p>
             </div>
           </article>
         </section>
@@ -169,6 +176,14 @@
             <svg class="icon"><use href="#i-sort" /></svg>
             <span>Vencimiento</span>
           </button>
+        </div>
+
+        <div class="quick-filters" role="group" aria-label="Filtros rápidos">
+          <button class="filter-chip" type="button" data-quick-filter="sin_abrir" aria-pressed="false">Sin abrir <span class="chip-count">0</span></button>
+          <button class="filter-chip" type="button" data-quick-filter="vencidas" aria-pressed="false">Vencidas <span class="chip-count">0</span></button>
+          <button class="filter-chip" type="button" data-quick-filter="por_vencer" aria-pressed="false">Por vencer <span class="chip-count">0</span></button>
+          <button class="filter-chip" type="button" data-quick-filter="pdf_pendiente" aria-pressed="false">PDF pendiente <span class="chip-count">0</span></button>
+          <button class="filter-chip" type="button" data-quick-filter="mias" aria-pressed="false">Tomadas por mí <span class="chip-count">0</span></button>
         </div>
 
         <div id="bulkActions" class="bulk-actions">

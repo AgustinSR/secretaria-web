@@ -57,8 +57,16 @@ let selectedFileIndex = 0;
 let currentUser = null;
 let sortByUpcomingDue = false;
 let activeInboxTab = 'documentacion';
+let activeQuickFilter = 'todas';
+let pdfToolsOpen = false;
+let pendingDeepLinkId = new URLSearchParams(window.location.search).get('id');
+let knownSolicitudIds = null;
+const baseDocumentTitle = document.title;
 const selectedBulkIds = new Set();
 let bulkDeleteInProgress = false;
+const claimInProgressIds = new Set();
+const restoreInProgressIds = new Set();
+const quickFilterButtons = document.querySelectorAll('[data-quick-filter]');
 const feedbackById = new Map();
 const mergeInProgressIds = new Set();
 const uploadInProgressIds = new Set();
@@ -121,7 +129,7 @@ dueSortButton.addEventListener('click', () => {
 selectVisibleButton.addEventListener('click', selectVisibleSolicitudes);
 selectExpiredButton.addEventListener('click', selectExpiredSolicitudes);
 clearSelectionButton.addEventListener('click', clearBulkSelection);
-deleteSelectedButton.addEventListener('click', deleteSelectedMessages);
+deleteSelectedButton.addEventListener('click', runBulkSelectionAction);
 tabButtons.forEach((button) => {
   button.addEventListener('click', () => {
     const nextTab = button.dataset.inboxTab || 'documentacion';
@@ -131,11 +139,20 @@ tabButtons.forEach((button) => {
     selectedFileIndex = 0;
     selectedBulkIds.clear();
     bulkFeedback.textContent = '';
+    syncUrl();
+    render();
+  });
+});
+quickFilterButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const next = button.dataset.quickFilter || 'todas';
+    activeQuickFilter = next === activeQuickFilter ? 'todas' : next;
     render();
   });
 });
 document.addEventListener('keydown', (event) => {
   if (appView.classList.contains('is-hidden') || confirmDialogNode.open) return;
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
   const target = event.target;
   const typing =
     target instanceof HTMLElement &&
@@ -147,6 +164,14 @@ document.addEventListener('keydown', (event) => {
   } else if (event.key === 'Escape' && target === searchInput && searchInput.value) {
     searchInput.value = '';
     render();
+  } else if (!typing && (event.key === 'ArrowDown' || event.key === 'j')) {
+    event.preventDefault();
+    moveQueueSelection(1);
+  } else if (!typing && (event.key === 'ArrowUp' || event.key === 'k')) {
+    event.preventDefault();
+    moveQueueSelection(-1);
+  } else if (!typing && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
+    moveFileSelection(event.key === 'ArrowRight' ? 1 : -1);
   }
 });
 
@@ -219,26 +244,48 @@ function confirmDialog(message, options = {}) {
   accept.className = `btn ${danger ? 'btn-danger' : 'btn-primary'}`;
   confirmDialogNode.classList.toggle('is-danger', danger);
   confirmDialogNode.returnValue = '';
+  const form = confirmDialogNode.querySelector('form');
+  // Se resuelve con el botón que envió el formulario además del evento close,
+  // porque algunos navegadores no disparan close al cerrar con method="dialog".
   return new Promise((resolve) => {
-    confirmDialogNode.addEventListener(
-      'close',
-      () => resolve(confirmDialogNode.returnValue === 'ok'),
-      { once: true },
-    );
+    const finish = (confirmed) => {
+      form.removeEventListener('submit', onSubmit);
+      confirmDialogNode.removeEventListener('cancel', onCancel);
+      confirmDialogNode.removeEventListener('close', onClose);
+      resolve(confirmed);
+    };
+    const onSubmit = (event) => finish(event.submitter?.value === 'ok');
+    const onCancel = () => finish(false);
+    const onClose = () => finish(confirmDialogNode.returnValue === 'ok');
+    form.addEventListener('submit', onSubmit);
+    confirmDialogNode.addEventListener('cancel', onCancel);
+    confirmDialogNode.addEventListener('close', onClose);
     confirmDialogNode.showModal();
     accept.focus();
   });
 }
 
-function showToast(message, type = 'success') {
+function showToast(message, type = 'success', action = null) {
   const node = document.createElement('div');
   node.className = `toast toast-${type}`;
   node.innerHTML = `${icon(type === 'error' ? 'alert' : 'check')}<span>${escapeHtml(message)}</span>`;
-  toastRegion.appendChild(node);
-  window.setTimeout(() => {
+  const dismiss = () => {
     node.classList.add('is-leaving');
     window.setTimeout(() => node.remove(), 220);
-  }, 3500);
+  };
+  if (action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'toast-action';
+    button.textContent = action.label;
+    button.addEventListener('click', () => {
+      dismiss();
+      action.onClick();
+    });
+    node.appendChild(button);
+  }
+  toastRegion.appendChild(node);
+  window.setTimeout(dismiss, action ? 8000 : 3500);
 }
 
 function subscribe() {
@@ -283,7 +330,9 @@ async function callAdminFunction(name, body = {}) {
     }
   }
   if (!response.ok || data.error) {
-    throw new Error(data.error || data.message || text || `No se pudo ejecutar ${name}.`);
+    const error = new Error(data.error || data.message || text || `No se pudo ejecutar ${name}.`);
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -294,9 +343,11 @@ function render(options = {}) {
   pruneBulkSelection();
   renderTabs();
   renderStats();
+  renderQuickFilters();
   renderSortControls();
   renderBulkActions(items);
   renderQueue(items);
+  renderDocumentTitle();
   const selected = solicitudes.find((item) => item.id === selectedId);
   workspace.classList.toggle('has-selection', Boolean(selected));
   if (selected) {
@@ -319,12 +370,27 @@ function isDocumentInboxItem(item) {
   return Boolean(item) && item.tipoSolicitud !== 'correccion' && !isCorrectionInboxItem(item);
 }
 
-function matchesActiveInboxTab(item) {
-  if (activeInboxTab === 'correcciones') return isCorrectionInboxItem(item);
-  if (activeInboxTab === 'listas') {
+function isTrashedSolicitud(item) {
+  return item?.eliminadoMesa === true;
+}
+
+function isInInboxTab(item, tab) {
+  if (!item) return false;
+  if (tab === 'papelera') return isTrashedSolicitud(item) && item.tipoSolicitud !== 'correccion';
+  if (isTrashedSolicitud(item)) return false;
+  if (tab === 'correcciones') return isCorrectionInboxItem(item);
+  if (tab === 'listas') {
     return isDocumentInboxItem(item) && isReadyToLoadSolicitud(item);
   }
   return isDocumentInboxItem(item) && !isReadyToLoadSolicitud(item);
+}
+
+function matchesActiveInboxTab(item) {
+  return isInInboxTab(item, activeInboxTab);
+}
+
+function inboxTabFor(item) {
+  return ['papelera', 'correcciones', 'listas', 'documentacion'].find((tab) => isInInboxTab(item, tab)) || null;
 }
 
 function renderCorrectionBadge(item) {
@@ -334,13 +400,9 @@ function renderCorrectionBadge(item) {
 }
 
 function inboxTabCount(tab) {
-  const previousTab = activeInboxTab;
-  activeInboxTab = tab;
-  const count = solicitudes.filter(
-    (item) => item.eliminadoMesa !== true && matchesActiveInboxTab(item) && !isCompletedSolicitud(item),
-  ).length;
-  activeInboxTab = previousTab;
-  return count;
+  const items = solicitudes.filter((item) => isInInboxTab(item, tab));
+  if (tab === 'listas' || tab === 'papelera') return items.length;
+  return items.filter((item) => !isCompletedSolicitud(item)).length;
 }
 
 function renderTabs() {
@@ -350,13 +412,63 @@ function renderTabs() {
     button.classList.toggle('is-active', isActive);
     button.setAttribute('aria-selected', String(isActive));
     const counter = button.querySelector('.tab-count');
-    if (counter) {
-      const count = tab === 'listas'
-        ? solicitudes.filter((item) => item.eliminadoMesa !== true && isDocumentInboxItem(item) && isReadyToLoadSolicitud(item)).length
-        : inboxTabCount(tab);
-      counter.textContent = count;
-    }
+    if (counter) counter.textContent = inboxTabCount(tab);
   });
+}
+
+function isUnreadSolicitud(item) {
+  return item?.vistoMesa !== true && !isCompletedSolicitud(item);
+}
+
+function isMergePending(item) {
+  return item?.merge?.required === true && item?.merge?.status !== 'done';
+}
+
+function currentViewerUid() {
+  return currentUser?.uid || currentUser?.email || '';
+}
+
+function claimHolder(item) {
+  const holder = item?.tomadaMesa;
+  return holder && (holder.uid || holder.email) ? holder : null;
+}
+
+function isClaimedByMe(item) {
+  const holder = claimHolder(item);
+  if (!holder) return false;
+  return (
+    (holder.uid && holder.uid === currentViewerUid()) ||
+    (holder.email && holder.email === currentUser?.email)
+  );
+}
+
+const quickFilters = {
+  todas: () => true,
+  sin_abrir: isUnreadSolicitud,
+  vencidas: (item) => !isCompletedSolicitud(item) && priorityInfo(item).level === 'vencida',
+  por_vencer: (item) =>
+    !isCompletedSolicitud(item) && ['alta', 'media'].includes(priorityInfo(item).level),
+  pdf_pendiente: isMergePending,
+  mias: isClaimedByMe,
+};
+
+function renderQuickFilters() {
+  const tabItems = solicitudes.filter(matchesActiveInboxTab);
+  quickFilterButtons.forEach((button) => {
+    const key = button.dataset.quickFilter;
+    const isActive = key === activeQuickFilter;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-pressed', String(isActive));
+    const counter = button.querySelector('.chip-count');
+    if (counter) counter.textContent = tabItems.filter(quickFilters[key] || quickFilters.todas).length;
+  });
+}
+
+function renderDocumentTitle() {
+  const unread = solicitudes.filter(
+    (item) => !isTrashedSolicitud(item) && isUnreadSolicitud(item),
+  ).length;
+  document.title = unread > 0 ? `(${unread}) ${baseDocumentTitle}` : baseDocumentTitle;
 }
 
 function isCompletedSolicitud(item) {
@@ -394,6 +506,9 @@ function inboxSortRank(item) {
 }
 
 function sortInboxItems(items) {
+  if (activeInboxTab === 'papelera') {
+    return items.slice().sort((a, b) => dateValue(b.eliminadoMesaAt) - dateValue(a.eliminadoMesaAt));
+  }
   return items.slice().sort((a, b) => {
     const rankDiff = inboxSortRank(a) - inboxSortRank(b);
     if (rankDiff !== 0) return rankDiff;
@@ -409,10 +524,11 @@ function sortInboxItems(items) {
 
 function filteredSolicitudes() {
   const query = normalize(searchInput.value);
+  const quickFilter = quickFilters[activeQuickFilter] || quickFilters.todas;
 
   const items = solicitudes.filter((item) => {
       if (!matchesActiveInboxTab(item)) return false;
-      if (item.eliminadoMesa === true) return false;
+      if (!quickFilter(item)) return false;
       if (!query) return true;
       const haystack = normalize(
         [
@@ -439,29 +555,28 @@ function renderSortControls() {
 }
 
 function renderStats() {
-  const visibleSolicitudes = solicitudes.filter(
-    (item) => matchesActiveInboxTab(item) && item.eliminadoMesa !== true,
-  );
+  const visibleSolicitudes = solicitudes.filter(matchesActiveInboxTab);
   const notDone = visibleSolicitudes.filter((item) => !isCompletedSolicitud(item));
   const totalLabel = document.querySelector('#statTotal')?.nextElementSibling;
-  const totalCount = activeInboxTab === 'listas' ? visibleSolicitudes.length : notDone.length;
-  document.querySelector('#statTotal').textContent = totalCount;
+  const showAll = activeInboxTab === 'listas' || activeInboxTab === 'papelera';
+  document.querySelector('#statTotal').textContent = showAll ? visibleSolicitudes.length : notDone.length;
   if (totalLabel) {
-    totalLabel.textContent =
-      activeInboxTab === 'listas' ? 'Listas para cargar' : 'Total pendientes';
+    totalLabel.textContent = {
+      listas: 'Listas para cargar',
+      papelera: 'En la papelera',
+    }[activeInboxTab] || 'Pendientes';
   }
   document.querySelector('#statUrgent').textContent = notDone.filter(
     (item) => priorityInfo(item).level === 'vencida' || priorityInfo(item).level === 'alta',
   ).length;
-  document.querySelector('#statReady').textContent = visibleSolicitudes.filter(
-    isReadyToLoadSolicitud,
-  ).length;
+  document.querySelector('#statUnread').textContent = visibleSolicitudes.filter(isUnreadSolicitud).length;
 }
 
 function renderBulkActions(items) {
   const selectedItems = selectedBulkItems();
+  const inTrash = activeInboxTab === 'papelera';
   const expiredCount = selectedItems.filter(isExpiredSolicitud).length;
-  const visibleExpired = items.filter(isExpiredSolicitud).length;
+  const visibleExpired = inTrash ? 0 : items.filter(isExpiredSolicitud).length;
   const count = selectedItems.length;
 
   bulkActions.classList.toggle('has-selection', count > 0);
@@ -470,11 +585,17 @@ function renderBulkActions(items) {
     count === 1 ? '1 seleccionada' : `${count} seleccionadas`;
   bulkSelectedHint.textContent =
     count > 0
-      ? `${expiredCount} vencida${expiredCount === 1 ? '' : 's'} seleccionada${expiredCount === 1 ? '' : 's'}.`
+      ? inTrash
+        ? 'Se pueden restaurar a la bandeja.'
+        : `${expiredCount} vencida${expiredCount === 1 ? '' : 's'} seleccionada${expiredCount === 1 ? '' : 's'}.`
       : visibleExpired > 0
         ? `${visibleExpired} vencida${visibleExpired === 1 ? '' : 's'} en esta vista.`
         : 'Elegí mensajes para operar en lote.';
 
+  deleteSelectedButton.className = `btn ${inTrash ? 'btn-primary' : 'btn-danger-soft'} btn-sm`;
+  deleteSelectedButton.innerHTML = inTrash
+    ? `${icon('rotate')}Restaurar`
+    : `${icon('trash')}Eliminar`;
   clearSelectionButton.disabled = count === 0 || bulkDeleteInProgress;
   deleteSelectedButton.disabled = count === 0 || bulkDeleteInProgress;
   selectVisibleButton.disabled = items.length === 0 || bulkDeleteInProgress;
@@ -483,6 +604,14 @@ function renderBulkActions(items) {
   deleteSelectedButton.classList.toggle('is-hidden', count === 0);
   selectExpiredButton.classList.toggle('is-hidden', visibleExpired === 0);
   selectVisibleButton.classList.toggle('is-hidden', items.length === 0);
+}
+
+function renderClaimPill(item) {
+  const holder = claimHolder(item);
+  if (!holder) return '';
+  const mine = isClaimedByMe(item);
+  const name = holder.name || holder.email || 'otra persona';
+  return `<span class="claim-pill ${mine ? 'is-mine' : ''}" title="Tomada por ${escapeHtml(name)}">${icon('user')}${mine ? 'Vos' : escapeHtml(name.split(/[\s@]/)[0])}</span>`;
 }
 
 function renderQueue(items) {
@@ -494,12 +623,14 @@ function renderQueue(items) {
     const itemButton = node.querySelector('.queue-item');
     const checkbox = node.querySelector('.queue-select');
     const priority = priorityInfo(item);
+    const completed = isCompletedSolicitud(item);
+    node.dataset.id = item.id;
     node.classList.toggle('is-selected', item.id === selectedId);
     node.classList.toggle('is-bulk-selected', selectedBulkIds.has(item.id));
     node.classList.toggle('is-viewed', item.vistoMesa === true);
-    node.classList.toggle('is-completed', isCompletedSolicitud(item));
+    node.classList.toggle('is-completed', completed);
     node.classList.toggle('is-correction', isCorrectionInboxItem(item));
-    node.dataset.priority = isCompletedSolicitud(item) ? 'completada' : priority.level;
+    node.dataset.priority = completed ? 'completada' : priority.level;
     checkbox.checked = selectedBulkIds.has(item.id);
     checkbox.setAttribute(
       'aria-label',
@@ -508,37 +639,118 @@ function renderQueue(items) {
     node.querySelector('.queue-title').textContent =
       doctorName(item) || patientName(item) || `Solicitud ${item.id}`;
     node.querySelector('.queue-subtitle').textContent = `Paciente: ${patientName(item)}`;
-    node.querySelector('.queue-dates').innerHTML = `
-      <span title="Fecha de práctica">${icon('clock')}${formatDate(item.fechaPractica)}</span>
-      <span title="Vencimiento">Vence ${formatDate(resolveFechaVencimiento(item))}</span>
-    `;
+    node.querySelector('.queue-dates').innerHTML = isTrashedSolicitud(item)
+      ? `<span>${icon('trash')}Eliminada ${formatDate(item.eliminadoMesaAt)}</span>`
+      : `
+        <span title="Fecha de práctica">${icon('clock')}${formatDate(item.fechaPractica)}</span>
+        <span title="Vencimiento">Vence ${formatDate(resolveFechaVencimiento(item))}</span>
+      `;
     const priorityPill = node.querySelector('.priority-pill');
     priorityPill.textContent = priority.label;
     priorityPill.classList.add(`priority-${priority.level}`);
-    node.querySelector('.status-pill').textContent = statusLabel(item);
-    const correctionBadge = renderCorrectionBadge(item);
-    if (correctionBadge) {
-      node.querySelector('.queue-meta').insertAdjacentHTML('afterbegin', correctionBadge);
+    const statusPill = node.querySelector('.status-pill');
+    if (completed) {
+      statusPill.innerHTML = `${icon('check')}${statusLabel(item)}`;
+    } else {
+      statusPill.remove();
     }
+    const meta = node.querySelector('.queue-meta');
+    meta.insertAdjacentHTML('beforeend', renderCorrectionBadge(item) + renderClaimPill(item));
     if (item.vistoMesa === true) {
       const viewedPill = document.createElement('span');
       viewedPill.className = 'viewed-pill';
       viewedPill.innerHTML = `${icon('eye')}${escapeHtml(viewedCountLabel(item))}`;
       viewedPill.title = viewedLabel(item);
-      node.querySelector('.queue-meta').appendChild(viewedPill);
+      meta.appendChild(viewedPill);
     }
+    meta.classList.toggle('is-hidden', !meta.children.length);
     checkbox.addEventListener('change', () => {
       setBulkSelected(item.id, checkbox.checked);
     });
-    itemButton.addEventListener('click', () => {
-      selectedId = item.id;
-      selectedFileIndex = 0;
-      const shouldMarkViewed = !hasCurrentViewer(item);
-      if (shouldMarkViewed) markSolicitudViewedLocally(item);
-      render();
-      if (shouldMarkViewed) markSolicitudViewed(item.id);
-    });
+    itemButton.addEventListener('click', () => selectSolicitud(item.id, { scroll: false }));
     queueList.appendChild(node);
+  }
+}
+
+function selectSolicitud(id, options = {}) {
+  const item = solicitudes.find((entry) => entry.id === id);
+  if (!item) return;
+  if (selectedId !== id) {
+    selectedId = id;
+    selectedFileIndex = 0;
+  }
+  const shouldMarkViewed = !hasCurrentViewer(item);
+  if (shouldMarkViewed) markSolicitudViewedLocally(item);
+  syncUrl();
+  render();
+  if (options.scroll !== false) {
+    queueList.querySelector(`[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
+  }
+  if (shouldMarkViewed) markSolicitudViewed(item.id);
+}
+
+function moveQueueSelection(delta) {
+  const items = filteredSolicitudes();
+  if (!items.length) return;
+  const index = items.findIndex((item) => item.id === selectedId);
+  const nextIndex = index < 0
+    ? (delta > 0 ? 0 : items.length - 1)
+    : Math.min(items.length - 1, Math.max(0, index + delta));
+  if (nextIndex === index) return;
+  selectSolicitud(items[nextIndex].id);
+}
+
+function moveFileSelection(delta) {
+  const item = solicitudes.find((entry) => entry.id === selectedId);
+  if (!item) return;
+  const total = normalizedFiles(item).length + normalizedCorrectedFiles(item).length;
+  const nextIndex = Math.min(total - 1, Math.max(0, selectedFileIndex + delta));
+  if (total === 0 || nextIndex === selectedFileIndex) return;
+  selectedFileIndex = nextIndex;
+  renderDetail(item);
+}
+
+// Al completar o eliminar, la solicitud sale de la lista: se recuerda la vecina
+// antes de la acción para pasar sola a la siguiente sin volver a la bandeja.
+function neighborSolicitudId(id) {
+  const items = filteredSolicitudes();
+  const index = items.findIndex((item) => item.id === id);
+  if (index < 0) return null;
+  return items[index + 1]?.id || items[index - 1]?.id || null;
+}
+
+function advanceFrom(id, neighborId) {
+  if (selectedId !== id && selectedId !== null) return;
+  const items = filteredSolicitudes();
+  if (items.some((item) => item.id === id)) return;
+  const next = items.find((item) => item.id === neighborId) || items[0];
+  if (next) {
+    selectSolicitud(next.id);
+  } else {
+    selectedId = null;
+    syncUrl();
+    render();
+  }
+}
+
+function solicitudUrl(id) {
+  const url = new URL(window.location.href);
+  url.search = '';
+  if (id) url.searchParams.set('id', id);
+  return url.toString();
+}
+
+function syncUrl() {
+  const next = solicitudUrl(selectedId);
+  if (next !== window.location.href) window.history.replaceState(null, '', next);
+}
+
+async function copySolicitudLink(id) {
+  try {
+    await navigator.clipboard.writeText(solicitudUrl(id));
+    showToast('Link copiado. Pegalo para compartir esta solicitud.');
+  } catch (_) {
+    showToast('No se pudo copiar el link.', 'error');
   }
 }
 
@@ -558,6 +770,11 @@ function renderDetail(item) {
   const archivos = [...archivosOriginales, ...archivosCorregidos];
   const selectedFile = archivos[selectedFileIndex] || archivos[0];
   const priority = priorityInfo(item);
+  const completed = isCompletedSolicitud(item);
+  const trashed = isTrashedSolicitud(item);
+  const trashNotice = trashed
+    ? `<div class="notice notice-danger">${icon('trash')}<span><strong>En la papelera</strong> desde el ${formatDateTime(item.eliminadoMesaAt)}${item.eliminadoMesaPor ? ` por ${escapeHtml(item.eliminadoMesaPor)}` : ''}. Restaurala para que vuelva a la bandeja.</span></div>`
+    : '';
   const cleanupNotice = item.archivosEliminados
     ? `<div class="notice notice-warning">${icon('alert')}<span>Los archivos fueron eliminados por la limpieza mensual el ${formatDateTime(item.archivosEliminadosAt)}. El historial del trámite se conserva.</span></div>`
     : '';
@@ -577,17 +794,23 @@ function renderDetail(item) {
             <h2>${escapeHtml(doctorName(item))}</h2>
             <div class="detail-tags">
               <span class="priority-pill priority-${priority.level}">${icon('clock')}${priority.label}</span>
-              <span class="tag">${statusLabel(item)}</span>
+              ${completed ? `<span class="tag tag-success">${icon('check')}${statusLabel(item)}</span>` : ''}
               ${renderCorrectionBadge(item)}
               <span class="tag">${icon('file')}${archivos.length} archivo${archivos.length === 1 ? '' : 's'}</span>
             </div>
           </div>
         </div>
         <div class="detail-header-side">
+          ${trashed ? '' : renderClaimControl(item)}
           ${renderViewSummary(item)}
+          <button id="copyLinkButton" class="icon-button" type="button" title="Copiar link a esta solicitud" aria-label="Copiar link a esta solicitud">
+            ${icon('link')}
+          </button>
         </div>
       </header>
+      ${feedbackHtml(item.id, 'claim')}
 
+      ${trashNotice}
       ${correctionNotice}
       ${cleanupNotice}
       ${renderMetadataPanel(item)}
@@ -606,10 +829,9 @@ function renderDetail(item) {
                 ${renderRemoveSelectedFilesControl(item, archivosOriginales)}
               </div>
               ${renderCorrectedFilesSection(archivosCorregidos, archivosOriginales.length)}
+              ${renderAppendFileControl(item)}
             </div>
           </section>
-          ${renderAppendFileControl(item)}
-          ${renderPdfPageControl(item, selectedFile)}
           <section class="card merge-card">
             <div class="card-head">
               <h3>${icon('layers')}PDF final unificado</h3>
@@ -624,7 +846,8 @@ function renderDetail(item) {
           </section>
         </div>
         <div class="viewer-panel">
-          ${renderViewerToolbar(selectedFile)}
+          ${renderViewerToolbar(selectedFile, item)}
+          ${pdfToolsOpen ? renderPdfPageControl(item, selectedFile) : ''}
           ${feedbackHtml(item.id, 'save')}
           ${renderViewer(selectedFile)}
         </div>
@@ -637,10 +860,7 @@ function renderDetail(item) {
             <h3>${icon('message')}Aviso al médico</h3>
           </div>
           <div class="card-body">
-            <p>
-              Enviá una observación visible en la app. La solicitud quedará como
-              observada y el médico recibirá una notificación.
-            </p>
+            <p>La solicitud queda observada y el médico recibe el motivo en la app.</p>
             <label class="sr-only" for="doctorNoticeInput">Motivo para el médico</label>
             <textarea
               id="doctorNoticeInput"
@@ -655,21 +875,20 @@ function renderDetail(item) {
             ${feedbackHtml(item.id, 'doctor')}
           </div>
         </section>
-        <section class="card danger-card">
-          <div class="card-head">
-            <h3>${icon('trash')}Eliminar de la bandeja</h3>
-          </div>
-          <div class="card-body">
-            <p>
-              Oculta esta solicitud de la bandeja de prestacional. El trámite y
-              sus archivos quedan guardados en Firebase para auditoría.
-            </p>
-            <button id="deleteMessageButton" class="btn btn-danger-soft" type="button">
-              ${icon('trash')}Eliminar de la bandeja
-            </button>
-            ${feedbackHtml(item.id, 'delete')}
-          </div>
-        </section>
+        ${trashed ? renderRestoreControl(item) : `
+          <section class="card danger-card">
+            <div class="card-head">
+              <h3>${icon('trash')}Eliminar de la bandeja</h3>
+            </div>
+            <div class="card-body">
+              <p>Va a la papelera. El trámite se conserva y se puede restaurar.</p>
+              <button id="deleteMessageButton" class="btn btn-danger-soft" type="button">
+                ${icon('trash')}Mover a la papelera
+              </button>
+              ${feedbackHtml(item.id, 'delete')}
+            </div>
+          </section>
+        `}
       </div>
 
       ${renderHistory(item.historial)}
@@ -680,9 +899,21 @@ function renderDetail(item) {
   detailPanel.querySelector('#detailBackButton')?.addEventListener('click', () => {
     selectedId = null;
     selectedFileIndex = 0;
+    syncUrl();
     render();
     window.scrollTo({ top: 0 });
   });
+  detailPanel
+    .querySelector('#copyLinkButton')
+    ?.addEventListener('click', () => copySolicitudLink(item.id));
+  detailPanel.querySelectorAll('[data-claim-action]').forEach((button) => {
+    button.addEventListener('click', () =>
+      claimSolicitud(item.id, button.dataset.claimAction),
+    );
+  });
+  detailPanel
+    .querySelector('#restoreMessageButton')
+    ?.addEventListener('click', () => restoreMessageToInbox(item.id));
   detailPanel
     .querySelector('#editMetadataButton')
     ?.addEventListener('click', () => {
@@ -727,8 +958,14 @@ function renderDetail(item) {
     .querySelector('#mergeFilesButton')
     ?.addEventListener('click', () => mergeFiles(item.id));
   detailPanel
-    .querySelector('#appendFileButton')
-    ?.addEventListener('click', () => appendFileToSolicitud(item.id));
+    .querySelector('#appendFileInput')
+    ?.addEventListener('change', () => appendFileToSolicitud(item.id));
+  detailPanel
+    .querySelector('#togglePdfToolsButton')
+    ?.addEventListener('click', () => {
+      pdfToolsOpen = !pdfToolsOpen;
+      renderDetail(item);
+    });
   detailPanel
     .querySelector('#removePdfPageButton')
     ?.addEventListener('click', () => removePageFromSelectedPdf(item.id, selectedFile));
@@ -736,13 +973,8 @@ function renderDetail(item) {
     .querySelector('#movePdfPageButton')
     ?.addEventListener('click', () => movePageInSelectedPdf(item.id, selectedFile));
   detailPanel
-    .querySelector('#appendPdfPageButton')
-    ?.addEventListener('click', () => appendPageToSelectedPdf(item.id, selectedFile));
-  detailPanel.querySelectorAll('.remove-file-button').forEach((button) => {
-    button.addEventListener('click', () => {
-      removeUploadedFileFromSolicitud(item.id, Number(button.dataset.originalIndex));
-    });
-  });
+    .querySelector('#appendPdfPageInput')
+    ?.addEventListener('change', () => appendPageToSelectedPdf(item.id, selectedFile));
   detailPanel
     .querySelector('#deleteMessageButton')
     ?.addEventListener('click', () => deleteMessageFromInbox(item.id));
@@ -754,6 +986,133 @@ function renderDetail(item) {
       window.open(selectedFile.downloadUrl, '_blank', 'noopener');
     }
   });
+}
+
+function renderClaimControl(item) {
+  const holder = claimHolder(item);
+  const busy = claimInProgressIds.has(item.id) ? 'disabled' : '';
+  if (!holder) {
+    return `
+      <button class="btn btn-secondary btn-sm" type="button" data-claim-action="claim" ${busy} title="Avisá a tus compañeras que estás trabajando esta solicitud">
+        ${icon('user')}Tomar solicitud
+      </button>
+    `;
+  }
+  const name = holder.name || holder.email || 'otra persona';
+  if (isClaimedByMe(item)) {
+    return `
+      <div class="claim-control is-mine">
+        <span>${icon('user')}La tenés vos</span>
+        <button class="btn btn-ghost btn-sm" type="button" data-claim-action="release" ${busy}>Liberar</button>
+      </div>
+    `;
+  }
+  return `
+    <div class="claim-control" title="Tomada el ${formatDateTime(holder.at)}">
+      <span>${icon('user')}Tomada por ${escapeHtml(name)}</span>
+      <button class="btn btn-ghost btn-sm" type="button" data-claim-action="claim" ${busy}>Tomar igual</button>
+    </div>
+  `;
+}
+
+function renderRestoreControl(item) {
+  const busy = restoreInProgressIds.has(item.id);
+  return `
+    <section class="card">
+      <div class="card-head">
+        <h3>${icon('rotate')}Restaurar a la bandeja</h3>
+      </div>
+      <div class="card-body">
+        <p>Vuelve a la bandeja con su prioridad y archivos.</p>
+        <button id="restoreMessageButton" class="btn btn-primary" type="button" ${busy ? 'disabled' : ''}>
+          ${icon('rotate')}${busy ? 'Restaurando…' : 'Restaurar'}
+        </button>
+        ${feedbackHtml(item.id, 'restore')}
+      </div>
+    </section>
+  `;
+}
+
+async function claimSolicitud(id, action, force = false) {
+  const item = solicitudes.find((entry) => entry.id === id);
+  if (!item || claimInProgressIds.has(id)) return;
+
+  const holder = claimHolder(item);
+  if (action === 'claim' && holder && !isClaimedByMe(item) && !force) {
+    const confirmed = await confirmDialog(
+      `${holder.name || holder.email} está trabajando esta solicitud. Si la tomás, va a figurar a tu nombre.`,
+      { title: 'Solicitud tomada', confirmLabel: 'Tomarla igual' },
+    );
+    if (!confirmed) return;
+    force = true;
+  }
+
+  const viewer = currentViewerProfile();
+  claimInProgressIds.add(id);
+  renderDetail(item);
+  try {
+    const result = await callAdminFunction('adminClaimObraSocialSolicitud', {
+      solicitudId: id,
+      action,
+      force,
+      displayName: viewer.name,
+      photoUrl: viewer.photoUrl,
+    });
+    item.tomadaMesa = result.tomadaMesa || null;
+    clearFeedback(id, 'claim');
+  } catch (error) {
+    if (error.status === 409 && !force) {
+      claimInProgressIds.delete(id);
+      await refreshSolicitudes({ silent: true });
+      const current = solicitudes.find((entry) => entry.id === id);
+      if (current && claimHolder(current)) return claimSolicitud(id, action);
+      return;
+    }
+    setFeedback(id, 'claim', 'error', firestoreErrorMessage(error, 'No se pudo tomar la solicitud.'));
+  } finally {
+    claimInProgressIds.delete(id);
+    render();
+  }
+}
+
+async function restoreMessageToInbox(id) {
+  if (restoreInProgressIds.has(id)) return;
+  const neighborId = neighborSolicitudId(id);
+  restoreInProgressIds.add(id);
+  const item = solicitudes.find((entry) => entry.id === id);
+  if (item) renderDetail(item);
+  try {
+    await restoreSolicitudes([id]);
+    showToast('Solicitud restaurada a la bandeja.');
+    advanceFrom(id, neighborId);
+  } catch (error) {
+    setFeedback(id, 'restore', 'error', firestoreErrorMessage(error, 'No se pudo restaurar la solicitud.'));
+  } finally {
+    restoreInProgressIds.delete(id);
+    const current = solicitudes.find((entry) => entry.id === id);
+    if (current && selectedId === id) renderDetail(current);
+  }
+}
+
+// Devuelve las solicitudes a la bandeja. Lanza el primer error si alguna falla.
+async function restoreSolicitudes(ids) {
+  const actor = currentUser?.email || 'mesa de ayuda prestacional';
+  let firstError = null;
+  let restored = 0;
+  for (const id of ids) {
+    try {
+      await callAdminFunction('adminRestoreObraSocialSolicitud', { solicitudId: id, actor });
+      const item = solicitudes.find((entry) => entry.id === id);
+      if (item) item.eliminadoMesa = false;
+      restored += 1;
+    } catch (error) {
+      firstError = firstError || error;
+      console.error('Error restoring message:', id, error);
+    }
+  }
+  await refreshSolicitudes({ silent: true });
+  if (firstError && restored === 0) throw firstError;
+  return { restored, failed: ids.length - restored };
 }
 
 function currentViewerProfile() {
@@ -835,6 +1194,7 @@ function upsertLocalViewer(item, viewer) {
   item.vistoMesaAt = item.vistoMesaAt || now;
   item.vistoMesaPor = item.vistoMesaPor || viewer.name;
   item.vistoMesaEmail = item.vistoMesaEmail || viewer.email;
+  item.vistoMesaUserId = item.vistoMesaUserId || viewer.uid;
   item.vistoMesaUsuarios = viewers;
   item.vistoMesaCantidad = viewers.length;
 }
@@ -1008,9 +1368,6 @@ function renderFileButtons(files, options = {}) {
       const deleteCheck = file.canRemove
         ? `<label class="file-delete-check" title="Seleccionar para quitar"><input class="file-delete-checkbox" type="checkbox" data-original-index="${file.originalIndex}" aria-label="Seleccionar ${escapeHtml(name)} para quitar" ${checked} /></label>`
         : '';
-      const removeButton = file.canRemove
-        ? `<button class="icon-button icon-button-sm icon-button-danger remove-file-button" data-original-index="${file.originalIndex}" type="button" title="Quitar archivo" aria-label="Quitar ${escapeHtml(name)}">${icon('x')}</button>`
-        : '';
       const isImage = ['jpg', 'jpeg', 'png'].includes((file.extension || '').toLowerCase());
       const iconClass = file.isMerged ? 'file-icon-merged' : isImage ? 'file-icon-image' : '';
       return `
@@ -1023,7 +1380,6 @@ function renderFileButtons(files, options = {}) {
               <small>${file.isMerged ? 'Unificado · ' : ''}${escapeHtml((file.extension || '').toUpperCase())} · ${formatBytes(file.sizeBytes)}</small>
             </span>
           </button>
-          ${removeButton}
         </div>
       `;
     })
@@ -1056,14 +1412,14 @@ function bindFilePickers(root) {
       const transfer = new DataTransfer();
       transfer.items.add(event.dataTransfer.files[0]);
       input.files = transfer.files;
-      sync();
+      input.dispatchEvent(new Event('change'));
     });
   });
 }
 
-function renderDropzone({ id, title, disabled = '' }) {
+function renderDropzone({ id, title, disabled = '', compact = false }) {
   return `
-    <label class="dropzone" for="${id}">
+    <label class="dropzone ${compact ? 'dropzone-compact' : ''} ${disabled ? 'is-disabled' : ''}" for="${id}">
       ${icon('upload')}
       <span class="dropzone-text">
         <strong>${title}</strong>
@@ -1086,18 +1442,10 @@ function renderCorrectedFilesSection(files, offset) {
 
 function renderAppendFileControl(item) {
   return `
-    <section class="card">
-      <div class="card-head">
-        <h3>${icon('upload')}Agregar archivo</h3>
-      </div>
-      <div class="card-body">
-        ${renderDropzone({ id: 'appendFileInput', title: 'Elegí o arrastrá un archivo', disabled: uploadButtonDisabled(item) })}
-        <button id="appendFileButton" class="btn btn-secondary" type="button" ${uploadButtonDisabled(item)}>
-          ${icon('plus')}${uploadButtonLabel(item)}
-        </button>
-        ${feedbackHtml(item.id, 'upload')}
-      </div>
-    </section>
+    <div class="file-section">
+      ${renderDropzone({ id: 'appendFileInput', title: uploadButtonLabel(item), disabled: uploadButtonDisabled(item) })}
+      ${feedbackHtml(item.id, 'upload')}
+    </div>
   `;
 }
 
@@ -1301,25 +1649,17 @@ function renderPdfPageControl(item, file) {
   const disabled = pdfPageEditButtonDisabled(item, file);
   const busy = pdfPageEditInProgressIds.has(pdfPageEditKey(item.id, file));
   return `
-    <section class="card">
-      <div class="card-head">
-        <h3>${icon('pencil')}Editar páginas del PDF</h3>
-      </div>
-      <div class="card-body pdf-page-tools">
-        <p class="hint">Sobre: <strong>${escapeHtml(file.name || 'PDF seleccionado')}</strong></p>
+    <div class="pdf-tools-panel">
+      <div class="pdf-page-tools">
         ${renderRemovePagePicker(item, file, disabled, busy)}
         ${renderMovePagePicker(item, file, disabled, busy)}
-        <div class="tool-divider"></div>
         <div class="pdf-page-actions">
-          ${renderDropzone({ id: 'appendPdfPageInput', title: 'Agregar página al final', disabled })}
-          <button id="appendPdfPageButton" class="btn btn-secondary btn-sm" type="button" ${disabled}>
-            ${icon('plus')}${busy ? 'Editando…' : 'Agregar'}
-          </button>
+          ${renderDropzone({ id: 'appendPdfPageInput', title: busy ? 'Editando…' : 'Agregar página al final', disabled, compact: true })}
         </div>
-        <p class="hint">La edición crea una nueva versión del PDF original. Después regenerá el PDF unificado.</p>
-        ${feedbackHtml(item.id, 'pdfPage')}
       </div>
-    </section>
+      <p class="hint">Cada cambio crea una nueva versión del PDF. Después regenerá el PDF unificado.</p>
+      ${feedbackHtml(item.id, 'pdfPage')}
+    </div>
   `;
 }
 function fileToBase64(file) {
@@ -1348,8 +1688,9 @@ function renderViewer(file) {
   return `<div class="viewer-content"><iframe title="Vista previa PDF" src="${url}"></iframe></div>`;
 }
 
-function renderViewerToolbar(file) {
+function renderViewerToolbar(file, item) {
   const disabled = file?.downloadUrl ? '' : 'disabled';
+  const canEdit = canEditPdfPages(item, file);
   return `
     <div class="viewer-toolbar">
       <div class="viewer-title">
@@ -1357,6 +1698,11 @@ function renderViewerToolbar(file) {
         <span>${escapeHtml((file?.extension || '').toUpperCase())} · ${formatBytes(file?.sizeBytes)}</span>
       </div>
       <div class="viewer-toolbar-actions">
+        ${canEdit ? `
+          <button id="togglePdfToolsButton" class="btn btn-ghost btn-sm ${pdfToolsOpen ? 'is-active' : ''}" type="button" aria-pressed="${pdfToolsOpen}">
+            ${icon('pencil')}Editar páginas
+          </button>
+        ` : ''}
         <button id="openFileButton" class="btn btn-ghost btn-sm" type="button" ${disabled}>
           ${icon('external')}Abrir
         </button>
@@ -1431,7 +1777,8 @@ async function markSolicitudCompleted(id) {
   );
   if (!confirmed) return;
 
-  setFeedback(id, 'complete', 'info', 'Marcando documentacion como completada...');
+  const neighborId = neighborSolicitudId(id);
+  setFeedback(id, 'complete', 'info', 'Marcando documentación como completada…');
   renderDetail(item);
 
   try {
@@ -1449,8 +1796,10 @@ async function markSolicitudCompleted(id) {
         revisadaEmail: result.reviewedByEmail || currentUser?.email || '',
       },
     });
-    setFeedback(id, 'complete', 'success', 'Documentacion completada. La solicitud quedo al final de la bandeja.');
+    setFeedback(id, 'complete', 'success', 'Documentación completada.');
     await refreshSolicitudes({ silent: true });
+    showToast(`"${title}" quedó completada.`);
+    advanceFrom(id, neighborId);
   } catch (error) {
     setFeedback(id, 'complete', 'error', firestoreErrorMessage(error, 'No se pudo marcar como completada.'));
     const current = solicitudes.find((entry) => entry.id === id);
@@ -1557,7 +1906,6 @@ async function appendFileToSolicitud(id) {
   if (uploadInProgressIds.has(id)) return;
 
   const input = detailPanel.querySelector('#appendFileInput');
-  const button = detailPanel.querySelector('#appendFileButton');
   const file = input?.files?.[0];
   const item = solicitudes.find((entry) => entry.id === id);
 
@@ -1592,9 +1940,7 @@ async function appendFileToSolicitud(id) {
   const filename = safeFilename(file.name || `archivo-${order}.${extension}`);
 
   uploadInProgressIds.add(id);
-  button.disabled = true;
-  button.textContent = 'Subiendo archivo...';
-  setFeedback(id, 'upload', 'info', 'Subiendo documentación a Firebase Storage.');
+  setFeedback(id, 'upload', 'info', `Subiendo "${filename}"…`);
   if (item) renderDetail(item);
 
   try {
@@ -1622,8 +1968,6 @@ async function appendFileToSolicitud(id) {
       uploadId: upload.uploadId,
       actor,
     });
-    
-    selectedFileIndex = order - 1;
     setFeedback(
       id,
       'upload',
@@ -1631,6 +1975,8 @@ async function appendFileToSolicitud(id) {
       'Archivo agregado. Regenerá el PDF unificado para incluirlo en la versión final.',
     );
     await refreshSolicitudes({ silent: true });
+    const updated = solicitudes.find((entry) => entry.id === id);
+    if (updated && selectedId === id) selectedFileIndex = Math.max(0, normalizedFiles(updated).length - 1);
   } catch (error) {
     setFeedback(
       id,
@@ -1862,76 +2208,23 @@ async function appendPageToSelectedPdf(id, selectedFile) {
     if (current) renderDetail(current);
   }
 }
-async function removeUploadedFileFromSolicitud(id, originalIndex) {
-  const item = solicitudes.find((entry) => entry.id === id);
-  const currentFiles = Array.isArray(item?.archivos) ? item.archivos : [];
-  const file = currentFiles[originalIndex];
-
-  if (!file) {
-    setFeedback(id, 'upload', 'error', 'No se encontró el archivo para quitar.');
-    if (item) renderDetail(item);
-    return;
-  }
-
-  const filename = file.name || file.originalName || 'archivo adjunto';
-  const confirmed = await confirmDialog(
-    `¿Querés quitar "${filename}" de esta solicitud? El archivo no se incluirá en el PDF unificado.`,
-    { title: 'Quitar archivo', confirmLabel: 'Quitar archivo', danger: true },
-  );
-  if (!confirmed) return;
-
-  const actor = currentUser?.email || 'mesa de ayuda prestacional';
-
-  try {
-    await callAdminFunction('adminRemoveObraSocialSolicitudFile', {
-      solicitudId: id,
-      originalIndex,
-      actor,
-    });
-    
-    selectedFileIndex = 0;
-    setFeedback(
-      id,
-      'upload',
-      'success',
-      'Archivo quitado. Regenerá el PDF unificado para dejar la versión final actualizada.',
-    );
-    await refreshSolicitudes({ silent: true });
-  } catch (error) {
-    setFeedback(
-      id,
-      'upload',
-      'error',
-      firestoreErrorMessage(error, 'No se pudo quitar el archivo adjunto.'),
-    );
-    const current = solicitudes.find((entry) => entry.id === id);
-    if (current) renderDetail(current);
-  }
-}
-
 async function deleteMessageFromInbox(id) {
   const item = solicitudes.find((entry) => entry.id === id);
   const title = doctorName(item) || patientName(item) || shortId(id);
-  const singleWarning = canDeleteWithSingleWarning(item);
   const confirmed = await confirmDialog(
-    singleWarning
-      ? `Vas a eliminar "${title}" de la bandeja. El mensaje ya no tiene prioridad.`
-      : `¿Seguro que querés eliminar "${title}" de la bandeja de prestacional?`,
-    { title: 'Eliminar de la bandeja', confirmLabel: 'Eliminar', danger: true },
+    canDeleteWithSingleWarning(item)
+      ? `"${title}" va a la papelera. Ya no tiene prioridad.`
+      : `"${title}" todavía tiene prioridad. Va a la papelera y la podés restaurar cuando quieras.`,
+    { title: 'Mover a la papelera', confirmLabel: 'Mover a la papelera', danger: true },
   );
   if (!confirmed) return;
 
-  if (!singleWarning) {
-    const finalConfirmation = await confirmDialog(
-      'Esta solicitud todavía tiene prioridad. El historial se conserva en Firebase. ¿Eliminar igual?',
-      { title: 'Confirmación final', confirmLabel: 'Eliminar igual', danger: true },
-    );
-    if (!finalConfirmation) return;
-  }
-
+  const neighborId = neighborSolicitudId(id);
   const button = detailPanel.querySelector('#deleteMessageButton');
-  button.disabled = true;
-  button.textContent = 'Eliminando...';
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Moviendo…';
+  }
   const actor = currentUser?.email || 'mesa de ayuda prestacional';
 
   try {
@@ -1939,10 +2232,14 @@ async function deleteMessageFromInbox(id) {
       solicitudId: id,
       actor,
     });
-    
-    selectedId = null;
-    setFeedback(id, 'delete', 'success', 'Mensaje eliminado de la bandeja.');
+    if (item) item.eliminadoMesa = true;
+    clearFeedback(id, 'delete');
     await refreshSolicitudes({ silent: true });
+    advanceFrom(id, neighborId);
+    showToast(`"${title}" se movió a la papelera.`, 'success', {
+      label: 'Deshacer',
+      onClick: () => undoDelete([id]),
+    });
   } catch (error) {
     setFeedback(
       id,
@@ -1951,12 +2248,25 @@ async function deleteMessageFromInbox(id) {
       firestoreErrorMessage(error, 'No se pudo eliminar el mensaje.'),
     );
     const current = solicitudes.find((entry) => entry.id === id);
-    if (current) renderDetail(current);
-  } finally {
-    button.disabled = false;
-    button.textContent = 'Eliminar de la bandeja';
+    if (current && selectedId === id) renderDetail(current);
   }
 }
+
+async function undoDelete(ids) {
+  try {
+    const { restored } = await restoreSolicitudes(ids);
+    showToast(restored === 1 ? 'Solicitud restaurada.' : `${restored} solicitudes restauradas.`);
+    if (ids.length === 1 && !selectedId) {
+      const item = solicitudes.find((entry) => entry.id === ids[0]);
+      const tab = inboxTabFor(item);
+      if (tab && tab !== activeInboxTab) activeInboxTab = tab;
+      selectSolicitud(ids[0]);
+    }
+  } catch (error) {
+    showToast(firestoreErrorMessage(error, 'No se pudo deshacer.'), 'error');
+  }
+}
+
 async function removeSelectedFilesFromSolicitud(id) {
   const item = solicitudes.find((entry) => entry.id === id);
   const selected = Array.from(selectedFileDeleteIndexes(id)).sort((a, b) => b - a);
@@ -2014,18 +2324,13 @@ async function removeSelectedFilesFromSolicitud(id) {
 
 function selectedBulkItems() {
   return solicitudes.filter(
-    (item) =>
-      matchesActiveInboxTab(item) &&
-      item.eliminadoMesa !== true &&
-      selectedBulkIds.has(item.id),
+    (item) => matchesActiveInboxTab(item) && selectedBulkIds.has(item.id),
   );
 }
 
 function pruneBulkSelection() {
   const activeIds = new Set(
-    solicitudes
-      .filter((item) => matchesActiveInboxTab(item) && item.eliminadoMesa !== true)
-      .map((item) => item.id),
+    solicitudes.filter(matchesActiveInboxTab).map((item) => item.id),
   );
   for (const id of Array.from(selectedBulkIds)) {
     if (!activeIds.has(id)) selectedBulkIds.delete(id);
@@ -2066,39 +2371,57 @@ function isExpiredSolicitud(item) {
   return priorityInfo(item).level === 'vencida';
 }
 
+async function runBulkSelectionAction() {
+  if (activeInboxTab === 'papelera') {
+    await restoreSelectedMessages();
+  } else {
+    await deleteSelectedMessages();
+  }
+}
+
+async function restoreSelectedMessages() {
+  const items = selectedBulkItems();
+  if (items.length === 0 || bulkDeleteInProgress) return;
+
+  bulkDeleteInProgress = true;
+  bulkFeedback.textContent = `Restaurando ${items.length} mensaje${items.length === 1 ? '' : 's'}…`;
+  render();
+  try {
+    const { restored, failed } = await restoreSolicitudes(items.map((item) => item.id));
+    items.forEach((item) => selectedBulkIds.delete(item.id));
+    bulkFeedback.textContent = failed > 0
+      ? `Se restauraron ${restored}. Fallaron ${failed}.`
+      : `Se restauraron ${restored} mensaje${restored === 1 ? '' : 's'}.`;
+  } catch (error) {
+    bulkFeedback.textContent = firestoreErrorMessage(error, 'No se pudieron restaurar.');
+  } finally {
+    bulkDeleteInProgress = false;
+    render();
+  }
+}
+
 async function deleteSelectedMessages() {
   const items = selectedBulkItems();
   if (items.length === 0 || bulkDeleteInProgress) return;
 
-  const allSingleWarning = items.every(canDeleteWithSingleWarning);
   const countLabel =
     items.length === 1 ? '1 mensaje seleccionado' : `${items.length} mensajes seleccionados`;
-  const expiredCount = items.filter(isExpiredSolicitud).length;
-  const oldCount = items.filter(isOldInboxSolicitud).length;
-  const lowPriorityLabel = `${expiredCount} vencido${expiredCount === 1 ? '' : 's'}, ${oldCount} con mas de 30 dias`;
+  const withPriority = items.filter((item) => !canDeleteWithSingleWarning(item)).length;
 
   const confirmed = await confirmDialog(
-    allSingleWarning
-      ? `Vas a eliminar ${countLabel} de la bandeja. Ya no tienen prioridad.`
-      : `Vas a eliminar ${countLabel} de la bandeja (${lowPriorityLabel}).`,
-    { title: 'Eliminar en lote', confirmLabel: 'Eliminar', danger: true },
+    withPriority > 0
+      ? `Vas a mover ${countLabel} a la papelera. ${withPriority} todavía ${withPriority === 1 ? 'tiene' : 'tienen'} prioridad. Se pueden restaurar cuando quieras.`
+      : `Vas a mover ${countLabel} a la papelera. Ya no tienen prioridad.`,
+    { title: 'Mover a la papelera', confirmLabel: 'Mover a la papelera', danger: true },
   );
   if (!confirmed) return;
 
-  if (!allSingleWarning) {
-    const finalConfirmation = await confirmDialog(
-      'Algunos mensajes todavía tienen prioridad. El historial se conserva en Firebase. ¿Eliminar igual?',
-      { title: 'Confirmación final', confirmLabel: 'Eliminar igual', danger: true },
-    );
-    if (!finalConfirmation) return;
-  }
-
   bulkDeleteInProgress = true;
-  bulkFeedback.textContent = `Eliminando ${items.length} mensaje${items.length === 1 ? '' : 's'}...`;
+  bulkFeedback.textContent = `Moviendo ${items.length} mensaje${items.length === 1 ? '' : 's'}…`;
   render();
 
   const actor = currentUser?.email || 'mesa de ayuda prestacional';
-  let deleted = 0;
+  const deletedIds = [];
   let failed = 0;
 
   for (const item of items) {
@@ -2107,7 +2430,7 @@ async function deleteSelectedMessages() {
         solicitudId: item.id,
         actor,
       });
-      deleted += 1;
+      deletedIds.push(item.id);
       selectedBulkIds.delete(item.id);
       if (selectedId === item.id) {
         selectedId = null;
@@ -2120,19 +2443,88 @@ async function deleteSelectedMessages() {
   }
 
   bulkDeleteInProgress = false;
-  bulkFeedback.textContent =
-    failed > 0
-      ? `Se eliminaron ${deleted}. Fallaron ${failed}.`
-      : `Se eliminaron ${deleted} mensaje${deleted === 1 ? '' : 's'}.`;
+  const deleted = deletedIds.length;
+  bulkFeedback.textContent = failed > 0 ? `Se movieron ${deleted}. Fallaron ${failed}.` : '';
+  syncUrl();
   await refreshSolicitudes({ silent: true });
+  if (deleted > 0) {
+    showToast(
+      `${deleted} mensaje${deleted === 1 ? '' : 's'} en la papelera.`,
+      'success',
+      { label: 'Deshacer', onClick: () => undoDelete(deletedIds) },
+    );
+  }
 }
+
+// Al refrescar en segundo plano solo se vuelve a dibujar el detalle abierto si
+// cambió y no se pierde nada de lo que la persona está haciendo en ese momento.
+function canRefreshOpenDetail(item) {
+  if (!item || confirmDialogNode.open) return false;
+  const id = item.id;
+  const busy = [
+    metadataEditIds,
+    metadataSaveInProgressIds,
+    mergeInProgressIds,
+    uploadInProgressIds,
+    fileDeleteInProgressIds,
+    claimInProgressIds,
+    restoreInProgressIds,
+  ].some((set) => set.has(id));
+  if (busy || pdfPageEditInProgressIds.size > 0) return false;
+  const active = document.activeElement;
+  if (active && detailPanel.contains(active) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName)) {
+    return false;
+  }
+  const notice = detailPanel.querySelector('#doctorNoticeInput');
+  if (notice && notice.value.trim() !== (item.observacionMedico?.motivo || '').trim()) return false;
+  const pickedFile = Array.from(detailPanel.querySelectorAll('input[type="file"]')).some(
+    (input) => input.files?.length,
+  );
+  return !pickedFile;
+}
+
+function announceNewSolicitudes() {
+  const ids = new Set(solicitudes.map((item) => item.id));
+  if (knownSolicitudIds) {
+    const fresh = solicitudes.filter(
+      (item) => !knownSolicitudIds.has(item.id) && !isTrashedSolicitud(item),
+    ).length;
+    if (fresh > 0) {
+      showToast(fresh === 1 ? 'Llegó 1 solicitud nueva.' : `Llegaron ${fresh} solicitudes nuevas.`);
+    }
+  }
+  knownSolicitudIds = ids;
+}
+
+function openDeepLinkedSolicitud() {
+  if (!pendingDeepLinkId) return;
+  const id = pendingDeepLinkId;
+  pendingDeepLinkId = null;
+  const item = solicitudes.find((entry) => entry.id === id);
+  if (!item) {
+    showToast('No se encontró la solicitud del link.', 'error');
+    syncUrl();
+    return;
+  }
+  activeInboxTab = inboxTabFor(item) || activeInboxTab;
+  activeQuickFilter = 'todas';
+  selectSolicitud(id);
+}
+
 async function refreshSolicitudes(options = {}) {
   refreshButton.disabled = true;
   try {
     const data = await callAdminFunction('adminListObraSocialSolicitudes');
-    const preserveDetail = options.silent && Boolean(selectedId);
+    const previous = solicitudes.find((item) => item.id === selectedId);
+    const previousJson = previous ? JSON.stringify(previous) : '';
     solicitudes = Array.isArray(data.items) ? data.items : [];
+    const current = solicitudes.find((item) => item.id === selectedId);
+    const detailChanged = Boolean(current) && JSON.stringify(current) !== previousJson;
+    const preserveDetail =
+      options.silent && Boolean(current) && (!detailChanged || !canRefreshOpenDetail(current));
     render({ preserveDetail });
+    announceNewSolicitudes();
+    openDeepLinkedSolicitud();
     if (!options.silent) showToast('Lista actualizada.');
   } catch (error) {
     if (!options.silent) {
@@ -2208,6 +2600,11 @@ function feedbackBox(type, message) {
       ${icon(feedbackIcons[type] || 'clock')}<span>${escapeHtml(message)}</span>
     </div>
   `;
+}
+
+function clearFeedback(id, key) {
+  const existing = feedbackById.get(id);
+  if (existing) delete existing[key];
 }
 
 function feedbackHtml(id, key) {
@@ -2293,7 +2690,7 @@ function mergeStatusHtml(item) {
       'Esta solicitud necesita un PDF unificado antes de cargarla al sistema externo.',
     );
   }
-  return `<p class="hint">Aunque tenga un solo archivo, podés generar un PDF final para dejar el flujo uniforme.</p>`;
+  return '';
 }
 
 function firestoreErrorMessage(error, fallback) {
@@ -2477,7 +2874,7 @@ function renderCompleteReviewControl(item) {
         <p>
           ${completed
             ? `Revisada por ${escapeHtml(reviewer)}${reviewedAt ? ` el ${reviewedAt}` : ''}. Queda al final de la bandeja.`
-            : 'Usalo cuando la documentación ya fue revisada y está lista para seguir el proceso.'}
+            : 'Pasa a “Listas para cargar” y se abre la siguiente solicitud.'}
         </p>
         <button id="completeReviewButton" class="btn btn-success" type="button" ${completed ? 'disabled' : ''}>
           ${icon('check')}${completed ? 'Completada' : 'Marcar como completada'}
